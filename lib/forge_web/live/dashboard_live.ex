@@ -483,7 +483,7 @@ defmodule ForgeWeb.DashboardLive do
               <span class="text-base-content/60">Sessions</span><span class="text-base-content/30">Cmd+B</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-base-content/60">New session</span><span class="text-base-content/30">Cmd+N</span>
+              <span class="text-base-content/60">New session</span><span class="text-base-content/30">Alt+N</span>
             </div>
             <div class="flex justify-between">
               <span class="text-base-content/60">Kill session</span><span class="text-base-content/30">Cmd+Del</span>
@@ -517,7 +517,7 @@ defmodule ForgeWeb.DashboardLive do
               Cmd+B
             </button>
             <button phx-click="new_session" class="hover:text-base-content/50 cursor-pointer">
-              Cmd+N
+              Alt+N
             </button>
             <button phx-click="toggle_ask" class="hover:text-base-content/50 cursor-pointer">
               Cmd+K

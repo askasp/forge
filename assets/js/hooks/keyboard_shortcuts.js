@@ -11,7 +11,7 @@ export const KeyboardShortcuts = {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "b") {
         e.preventDefault()
         this.pushEvent("toggle_sidebar", {})
-      } else if ((e.metaKey || e.ctrlKey) && e.key === "n") {
+      } else if (e.altKey && e.key === "n") {
         e.preventDefault()
         this.pushEvent("new_session", {})
       } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
