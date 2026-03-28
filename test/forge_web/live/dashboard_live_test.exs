@@ -35,35 +35,24 @@ defmodule ForgeWeb.DashboardLiveTest do
       assert html =~ "+ New session"
     end
 
-    test "toggle_sidebar hides the sidebar", %{conn: conn, session: session} do
+    test "sidebar stays visible (always rendered)", %{conn: conn, session: session} do
       {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
 
-      # Sidebar starts visible
       assert render(view) =~ "+ New session"
 
-      # Toggle sidebar off (Cmd+B triggers this event)
+      # Sidebar is always visible, toggle doesn't hide it
       html = render_click(view, "toggle_sidebar")
-
-      # Sidebar should be hidden
-      refute html =~ "w-56 flex-shrink-0 border-r"
-      refute html =~ "+ New session"
-    end
-
-    test "toggle_sidebar twice shows sidebar again", %{conn: conn, session: session} do
-      {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
-
-      # Toggle off
-      render_click(view, "toggle_sidebar")
-      # Toggle on
-      html = render_click(view, "toggle_sidebar")
-
       assert html =~ "+ New session"
       assert html =~ "w-56 flex-shrink-0 border-r"
     end
   end
 
   describe "new_session event (Cmd+N)" do
-    test "navigates to home with project query param", %{conn: conn, session: session, project: project} do
+    test "navigates to home with project query param", %{
+      conn: conn,
+      session: session,
+      project: project
+    } do
       {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
 
       # Trigger the new_session event (what Cmd+N does via JS hook)

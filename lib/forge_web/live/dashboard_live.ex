@@ -141,6 +141,12 @@ defmodule ForgeWeb.DashboardLive do
                 >
                   <.session_indicator s={s} />
                   <span class="truncate">{s.goal || s.id}</span>
+                  <span
+                    :if={s.waiting_human > 0 && s.id != @session_id}
+                    class="font-mono text-[8px] tracking-wider uppercase text-base-content/50 flex-shrink-0"
+                  >
+                    input
+                  </span>
                 </a>
                 <button
                   :if={s.id != @session_id}
@@ -460,13 +466,27 @@ defmodule ForgeWeb.DashboardLive do
             Keyboard Shortcuts
           </h3>
           <div class="space-y-2 font-mono text-xs">
-            <div class="flex justify-between"><span class="text-base-content/60">Continue</span><span class="text-base-content/30">Cmd+Enter</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">Pause</span><span class="text-base-content/30">Esc</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">Skip</span><span class="text-base-content/30">Cmd+.</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">Ask panel</span><span class="text-base-content/30">Cmd+K</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">Sessions</span><span class="text-base-content/30">Cmd+B</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">New session</span><span class="text-base-content/30">Cmd+N</span></div>
-            <div class="flex justify-between"><span class="text-base-content/60">Shortcuts</span><span class="text-base-content/30">?</span></div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Continue</span><span class="text-base-content/30">Cmd+Enter</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Pause</span><span class="text-base-content/30">Esc</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Skip</span><span class="text-base-content/30">Cmd+.</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Ask panel</span><span class="text-base-content/30">Cmd+K</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Sessions</span><span class="text-base-content/30">Cmd+B</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">New session</span><span class="text-base-content/30">Cmd+N</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-base-content/60">Shortcuts</span><span class="text-base-content/30">?</span>
+            </div>
           </div>
         </div>
       </div>
@@ -480,10 +500,18 @@ defmodule ForgeWeb.DashboardLive do
             agent_started_at={@agent_started_at}
           />
           <div class="flex items-center gap-3 font-mono text-[10px] text-base-content/35">
-            <button phx-click="toggle_sidebar" class="hover:text-base-content/50 cursor-pointer">Cmd+B</button>
-            <button phx-click="new_session" class="hover:text-base-content/50 cursor-pointer">Cmd+N</button>
-            <button phx-click="toggle_ask" class="hover:text-base-content/50 cursor-pointer">Cmd+K</button>
-            <button phx-click="toggle_shortcuts" class="hover:text-base-content/50 cursor-pointer">?</button>
+            <button phx-click="toggle_sidebar" class="hover:text-base-content/50 cursor-pointer">
+              Cmd+B
+            </button>
+            <button phx-click="new_session" class="hover:text-base-content/50 cursor-pointer">
+              Cmd+N
+            </button>
+            <button phx-click="toggle_ask" class="hover:text-base-content/50 cursor-pointer">
+              Cmd+K
+            </button>
+            <button phx-click="toggle_shortcuts" class="hover:text-base-content/50 cursor-pointer">
+              ?
+            </button>
           </div>
         </div>
       </footer>
@@ -583,6 +611,16 @@ defmodule ForgeWeb.DashboardLive do
           <span :if={@step.tags[:pr]} class="font-mono text-[10px] text-base-content/25">
             PR {@step.tags[:pr]}
           </span>
+          <button
+            :if={@is_running}
+            phx-click="restart_task"
+            phx-value-id={@step.id}
+            data-confirm="Kill and restart this task?"
+            class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
+            title="Kill & restart"
+          >
+            &#x21bb;
+          </button>
           <button
             :if={@step.status == :todo && !@is_running && !@editing}
             phx-click="delete_step"
@@ -957,6 +995,20 @@ defmodule ForgeWeb.DashboardLive do
     {:noreply, socket}
   end
 
+  def handle_event("restart_task", %{"id" => task_id}, socket) do
+    # Kill the running agent and reset task to planned for re-dispatch
+    Forge.Scheduler.skip_task(socket.assigns.session_id, task_id)
+
+    # Re-fetch the task and reset it to planned
+    case Forge.Repo.get(Forge.Schemas.Task, task_id) do
+      nil -> :ok
+      task -> TaskEngine.retry_task(task)
+    end
+
+    Forge.Scheduler.resume(socket.assigns.session_id)
+    {:noreply, reload_tasks(socket)}
+  end
+
   def handle_event("load_diff", %{"index" => index}, socket) do
     index = String.to_integer(index)
     workdir = socket.assigns.ask_workdir || "."
@@ -1096,6 +1148,7 @@ defmodule ForgeWeb.DashboardLive do
 
   def handle_event("new_session", _params, socket) do
     project_path = socket.assigns.project_path
+
     if project_path do
       {:noreply, push_navigate(socket, to: ~p"/?project=#{project_path}")}
     else

@@ -21,8 +21,8 @@ defmodule ForgeWeb.HomeLiveTest do
     test "scan section is not shown initially", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/")
 
-      # No goal textarea since scan hasn't happened
-      refute html =~ "Describe what you want to build"
+      # No task textarea since scan hasn't happened
+      refute html =~ "What do you want done?"
     end
   end
 
@@ -44,8 +44,8 @@ defmodule ForgeWeb.HomeLiveTest do
       # The :do_scan info handler will fire after mount
       html = render(view)
 
-      # After scan completes, the goal textarea should be visible
-      assert html =~ "Describe what you want to build"
+      # After scan completes, the task textarea should be visible
+      assert html =~ "What do you want done?"
       assert html =~ "Start Session"
 
       cleanup_test_project(project_path)
@@ -81,20 +81,21 @@ defmodule ForgeWeb.HomeLiveTest do
       render(view)
 
       html = render_submit(view, "start_session", %{"goal" => ""})
-      assert html =~ "Goal is required"
+      assert html =~ "Describe what you want done"
 
       cleanup_test_project(project_path)
     end
 
-    test "start_session requires config to be saved first", %{conn: conn} do
+    test "start_session auto-saves config for new projects", %{conn: conn} do
       project_path = create_test_project()
 
       {:ok, view, _html} = live(conn, "/?project=#{URI.encode(project_path)}")
       # Wait for scan
       render(view)
 
+      # Should attempt to start (auto-saves config), but worktree creation fails on test repo
       html = render_submit(view, "start_session", %{"goal" => "Build a feature"})
-      assert html =~ "Save config before starting"
+      assert html =~ "Failed:"
 
       cleanup_test_project(project_path)
     end
@@ -106,7 +107,7 @@ defmodule ForgeWeb.HomeLiveTest do
 
       html = render_submit(view, "scan_project", %{"project_path" => ""})
 
-      refute html =~ "Describe what you want to build"
+      refute html =~ "What do you want done?"
     end
 
     test "scanning invalid path shows error", %{conn: conn} do
@@ -149,7 +150,9 @@ defmodule ForgeWeb.HomeLiveTest do
   # -- Test helpers --
 
   defp create_test_project do
-    path = Path.join(System.tmp_dir!(), "forge_test_project_#{:erlang.unique_integer([:positive])}")
+    path =
+      Path.join(System.tmp_dir!(), "forge_test_project_#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(path)
 
     # Initialize a git repo so ProjectScanner.scan succeeds

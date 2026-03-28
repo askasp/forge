@@ -74,7 +74,7 @@ defmodule Forge.Session do
           waiting_human:
             count(
               fragment(
-                "CASE WHEN ? = 'planned' AND ? = 'human' THEN 1 END",
+                "CASE WHEN ? IN ('planned', 'assigned') AND ? = 'human' THEN 1 END",
                 t.state,
                 t.role
               )
@@ -103,7 +103,10 @@ defmodule Forge.Session do
           in_progress: coalesce(tc.in_progress, 0),
           waiting_human: coalesce(tc.waiting_human, 0)
         },
-        order_by: [desc: s.inserted_at]
+        order_by: [
+          desc: coalesce(tc.waiting_human, 0),
+          desc: s.inserted_at
+        ]
       )
 
     query =

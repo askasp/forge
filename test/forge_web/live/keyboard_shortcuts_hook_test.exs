@@ -92,7 +92,9 @@ defmodule ForgeWeb.KeyboardShortcutsHookTest do
       assert src =~ ~s(removeEventListener("keydown")
     end
 
-    test "does NOT guard against input/textarea focus (form submit should work anywhere)", %{home_source: src} do
+    test "does NOT guard against input/textarea focus (form submit should work anywhere)", %{
+      home_source: src
+    } do
       # HomeShortcuts intentionally does NOT skip when focused on textarea
       # because the user types a goal in the textarea and presses Cmd+Enter to submit
       refute src =~ "tagName"

@@ -9,6 +9,13 @@ defmodule Forge.Session.AgentRunner do
 
   alias Forge.TaskEngine
 
+  # No output for 5 minutes = stalled
+  @activity_timeout_ms 5 * 60 * 1000
+  # 30 minutes total = runaway
+  @total_timeout_ms 30 * 60 * 1000
+  # Check every 30 seconds
+  @check_interval_ms 30_000
+
   defstruct [
     :session_id,
     :task,
@@ -18,6 +25,8 @@ defmodule Forge.Session.AgentRunner do
     :agent_run_id,
     :started_at,
     :prompt,
+    started_at_mono: nil,
+    last_activity_at: nil,
     output: [],
     buffer: "",
     tool_blocks: %{},
@@ -41,6 +50,8 @@ defmodule Forge.Session.AgentRunner do
     session_id = Keyword.fetch!(opts, :session_id)
     agent_run_id = Keyword.fetch!(opts, :agent_run_id)
 
+    now_mono = System.monotonic_time(:millisecond)
+
     state = %__MODULE__{
       session_id: session_id,
       task: task,
@@ -48,11 +59,16 @@ defmodule Forge.Session.AgentRunner do
       workdir: workdir,
       prompt: prompt,
       agent_run_id: agent_run_id,
-      started_at: DateTime.utc_now()
+      started_at: DateTime.utc_now(),
+      started_at_mono: now_mono,
+      last_activity_at: now_mono
     }
 
     # Start the agent immediately
     send(self(), :start_agent)
+
+    # Start timeout monitoring
+    Process.send_after(self(), :check_timeout, @check_interval_ms)
 
     {:ok, state}
   end
@@ -96,6 +112,7 @@ defmodule Forge.Session.AgentRunner do
   end
 
   def handle_info({port, {:data, data}}, %{port: port} = state) do
+    state = %{state | last_activity_at: System.monotonic_time(:millisecond)}
     combined = state.buffer <> data
 
     segments = String.split(combined, "\n")
@@ -165,9 +182,71 @@ defmodule Forge.Session.AgentRunner do
     {:stop, :normal, state}
   end
 
+  def handle_info(:check_timeout, %{port: nil} = state) do
+    # Port already exited, nothing to check
+    {:noreply, state}
+  end
+
+  def handle_info(:check_timeout, state) do
+    now = System.monotonic_time(:millisecond)
+
+    cond do
+      now - state.started_at_mono > @total_timeout_ms ->
+        Logger.warning("[AgentRunner] Total timeout for task #{state.task.id}")
+        timeout_and_fail(state, "Agent timed out after #{div(@total_timeout_ms, 60_000)} minutes")
+
+      now - state.last_activity_at > @activity_timeout_ms ->
+        Logger.warning("[AgentRunner] Activity timeout for task #{state.task.id}")
+
+        timeout_and_fail(
+          state,
+          "Agent stalled — no output for #{div(@activity_timeout_ms, 60_000)} minutes"
+        )
+
+      true ->
+        Process.send_after(self(), :check_timeout, @check_interval_ms)
+        {:noreply, state}
+    end
+  end
+
   def handle_info(msg, state) do
     Logger.debug("[AgentRunner] Unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  defp timeout_and_fail(state, reason) do
+    broadcast_output(state, "!! #{reason}")
+
+    # Kill the port
+    if state.port do
+      try do
+        Port.close(state.port)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    # Complete agent run record
+    stdout = state.output |> Enum.reverse() |> Enum.join("\n")
+
+    TaskEngine.complete_agent_run(state.agent_run_id, %{
+      exit_code: -1,
+      stdout_log: stdout,
+      structured_output: %{"error" => reason}
+    })
+
+    # Notify scheduler
+    send(state.scheduler, {:agent_done, state.task.id, %{exit_code: -1, error: reason}})
+
+    # Broadcast finish
+    Phoenix.PubSub.broadcast(
+      Forge.PubSub,
+      "session:#{state.session_id}",
+      {:agent_finished, state.task.id, state.task.role}
+    )
+
+    cleanup(state)
+    {:stop, :normal, %{state | port: nil}}
   end
 
   # ── Stream JSON Parser ─────────────────────────────────────────
