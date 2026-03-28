@@ -1671,20 +1671,35 @@ defmodule ForgeWeb.DashboardLive do
       Enum.any?(tasks, &(&1.role == :planner and &1.state in [:assigned, :in_progress]))
 
     has_running = Enum.any?(tasks, &(&1.state in [:assigned, :in_progress]))
-    has_failed = Enum.any?(tasks, &(&1.state == :failed))
     has_planned = Enum.any?(tasks, &(&1.state == :planned))
     planner_done = Enum.any?(tasks, &(&1.role == :planner and &1.state == :done))
-    all_done = tasks != [] and Enum.all?(tasks, &(&1.state == :done))
     only_planner = tasks != [] and Enum.all?(tasks, &(&1.role == :planner))
+
+    # Failed tasks that have child tasks (fix cycles) are "resolved" — don't block completion
+    has_unresolved_failure =
+      Enum.any?(tasks, fn task ->
+        task.state == :failed and
+          not Enum.any?(tasks, fn t -> t.parent_task_id == task.id end)
+      end)
+
+    all_terminal =
+      tasks != [] and
+        Enum.all?(tasks, &(&1.state in [:done, :failed]))
+
+    all_done = all_terminal and not has_unresolved_failure
+    autopilot = session.automation == :autopilot
 
     cond do
       session.state == :paused -> :paused
       has_planner_running -> :planning
-      planner_done and only_planner -> :planning_done
+      planner_done and only_planner and not autopilot -> :planning_done
       has_running -> :cruising
-      has_failed -> :stopped_error
+      has_unresolved_failure -> :stopped_error
       all_done -> :complete
-      has_planned -> :planning_done
+      has_planned and not autopilot -> :planning_done
+      # Autopilot: scheduler will dispatch planned tasks, show cruising not planning_done
+      has_planned and autopilot -> :cruising
+      planner_done and only_planner and autopilot -> :cruising
       true -> :idle
     end
   end
