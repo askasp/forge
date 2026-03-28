@@ -47,7 +47,7 @@ defmodule ForgeWeb.DashboardLiveTest do
     end
   end
 
-  describe "new_session event (Cmd+N)" do
+  describe "new_session event (Alt+N)" do
     test "navigates to home with project query param", %{
       conn: conn,
       session: session,
@@ -55,7 +55,7 @@ defmodule ForgeWeb.DashboardLiveTest do
     } do
       {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
 
-      # Trigger the new_session event (what Cmd+N does via JS hook)
+      # Trigger the new_session event (what Alt+N does via JS hook)
       assert {:error, {:live_redirect, %{to: redirect_path}}} =
                render_click(view, "new_session")
 
@@ -83,16 +83,16 @@ defmodule ForgeWeb.DashboardLiveTest do
       refute html =~ "Keyboard Shortcuts"
     end
 
-    test "toggle_shortcuts shows the overlay with Cmd+N listed", %{conn: conn, session: session} do
+    test "toggle_shortcuts shows the overlay with Alt+N listed", %{conn: conn, session: session} do
       {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
 
       html = render_click(view, "toggle_shortcuts")
 
       # Overlay should be visible
       assert html =~ "Keyboard Shortcuts"
-      # Cmd+N should be listed
+      # Alt+N should be listed
       assert html =~ "New session"
-      assert html =~ "Cmd+N"
+      assert html =~ "Alt+N"
       # Other shortcuts should also be listed
       assert html =~ "Cmd+B"
       assert html =~ "Cmd+Enter"
@@ -110,12 +110,12 @@ defmodule ForgeWeb.DashboardLiveTest do
   end
 
   describe "footer hints" do
-    test "footer shows Cmd+N hint button", %{conn: conn, session: session} do
+    test "footer shows Alt+N hint button", %{conn: conn, session: session} do
       {:ok, _view, html} = live(conn, ~p"/session/#{session.id}")
 
-      # Footer should have the Cmd+N button
+      # Footer should have the Alt+N button
       assert html =~ ~s(phx-click="new_session")
-      assert html =~ "Cmd+N"
+      assert html =~ "Alt+N"
     end
 
     test "footer shows Cmd+B hint button", %{conn: conn, session: session} do

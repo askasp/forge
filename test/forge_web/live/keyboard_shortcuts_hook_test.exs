@@ -34,8 +34,8 @@ defmodule ForgeWeb.KeyboardShortcutsHookTest do
       assert src =~ "toggle_sidebar"
     end
 
-    test "binds Cmd+N to new_session", %{kb_source: src} do
-      assert src =~ ~r/metaKey.*ctrlKey.*"n"/s
+    test "binds Alt+N to new_session", %{kb_source: src} do
+      assert src =~ ~r/altKey.*"n"/s
       assert src =~ "new_session"
     end
 
