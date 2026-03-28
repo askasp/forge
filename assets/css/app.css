@@ -102,6 +102,35 @@ body {
   font-family: "JetBrains Mono", monospace;
 }
 
+/* ── Forge Animations ─────────────────────────────────────────── */
+
+/* Scanning bar: slides left→right across a running card's top edge */
+@keyframes sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.animate-sweep {
+  animation: sweep 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Marching dash for sidebar running indicator */
+@keyframes march {
+  0%   { stroke-dashoffset: 8; }
+  100% { stroke-dashoffset: 0; }
+}
+.animate-march {
+  animation: march 0.6s linear infinite;
+}
+
+/* Slow blink for attention-needed states */
+@keyframes attention {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.2; }
+}
+.animate-attention {
+  animation: attention 1.5s ease-in-out infinite;
+}
+
 /* Subtle paper texture */
 body::before {
   content: "";

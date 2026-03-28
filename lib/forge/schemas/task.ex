@@ -6,27 +6,44 @@ defmodule Forge.Schemas.Task do
   @foreign_key_type :binary_id
 
   schema "tasks" do
-    field :role, Ecto.Enum, values: [:planner, :dev, :qa, :reviewer, :human]
-    field :state, Ecto.Enum, values: [:planned, :assigned, :in_progress, :done, :failed], default: :planned
-    field :title, :string
-    field :prompt, :string
-    field :result, :map
-    field :sort_order, :integer, default: 0
-    field :iteration_count, :integer, default: 0
-    field :acceptance_criteria, :string
+    field(:role, Ecto.Enum, values: [:planner, :dev, :qa, :reviewer, :human])
 
-    belongs_to :session, Forge.Schemas.Session
-    belongs_to :parent_task, __MODULE__
-    belongs_to :depends_on, __MODULE__
-    has_many :child_tasks, __MODULE__, foreign_key: :parent_task_id
-    has_many :agent_runs, Forge.Schemas.AgentRun
+    field(:state, Ecto.Enum,
+      values: [:planned, :assigned, :in_progress, :done, :failed],
+      default: :planned
+    )
+
+    field(:title, :string)
+    field(:prompt, :string)
+    field(:result, :map)
+    field(:sort_order, :integer, default: 0)
+    field(:iteration_count, :integer, default: 0)
+    field(:acceptance_criteria, :string)
+
+    belongs_to(:session, Forge.Schemas.Session)
+    belongs_to(:parent_task, __MODULE__)
+    belongs_to(:depends_on, __MODULE__)
+    has_many(:child_tasks, __MODULE__, foreign_key: :parent_task_id)
+    has_many(:agent_runs, Forge.Schemas.AgentRun)
 
     timestamps(type: :utc_datetime)
   end
 
   def changeset(task, attrs) do
     task
-    |> cast(attrs, [:session_id, :parent_task_id, :depends_on_id, :role, :state, :title, :prompt, :result, :sort_order, :iteration_count, :acceptance_criteria])
+    |> cast(attrs, [
+      :session_id,
+      :parent_task_id,
+      :depends_on_id,
+      :role,
+      :state,
+      :title,
+      :prompt,
+      :result,
+      :sort_order,
+      :iteration_count,
+      :acceptance_criteria
+    ])
     |> validate_required([:session_id, :role, :title])
     |> foreign_key_constraint(:session_id)
     |> foreign_key_constraint(:parent_task_id)

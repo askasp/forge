@@ -36,6 +36,13 @@ defmodule Forge.PromptBuilder do
   ```json
   {"result": "summary of what you did", "files_changed": ["path/to/file.ex"], "commits": ["abc1234"]}
   ```
+
+  If you are blocked on a major decision that requires human input, output:
+  ```json
+  {"needs_human": true, "question": "Describe what you need the human to decide"}
+  ```
+  The system will pause, ask the human, and resume your task with the answer.
+  Only use this for genuine blockers — not for minor style choices.
   """
 
   @qa_role """
@@ -66,6 +73,11 @@ defmodule Forge.PromptBuilder do
   Or if issues found:
   ```json
   {"passed": false, "summary": "2 issues found", "issues": ["description of issue 1", "description of issue 2"]}
+  ```
+
+  If you are blocked and need human input to proceed:
+  ```json
+  {"needs_human": true, "question": "Describe what you need the human to decide"}
   ```
   """
 
@@ -113,15 +125,38 @@ defmodule Forge.PromptBuilder do
   1. Read the goal provided in your prompt
   2. Read CLAUDE.md files for conventions
   3. Explore the codebase to find relevant modules, patterns, and utilities
-  4. Create a plan as a list of dev tasks
+  4. Create a plan as a list of tasks
 
   ## Task Design
 
   - Each task: ONE focused change (<100 lines, <5 files)
   - Use depends_on to express ordering (0-indexed position in the array)
   - Reference specific files to create or modify in each task description
-  - Do NOT plan QA or review tasks — those are created automatically by the pipeline
-  - Write specific, testable acceptance_criteria for each task so QA can verify
+  - Write specific, testable acceptance_criteria for each dev task so QA can verify
+
+  ## Roles
+
+  Each task has a role that determines who executes it:
+  - "dev" — implements code changes (default if role is omitted)
+  - "qa" — writes tests and verifies the implementation works
+  - "reviewer" — reviews code diff for bugs, security, and correctness
+  - "human" — asks the user a question and waits for their answer before continuing
+
+  ## Plan Structure
+
+  Structure your plan like this:
+  1. If the goal is ambiguous, start with a "human" task to ask clarifying questions
+  2. Dev tasks that implement the feature (group related changes)
+  3. One QA task after the dev tasks to test the complete feature end-to-end
+  4. One reviewer task at the end to review the full diff against the base branch
+
+  Use "human" tasks when you need the user to make a decision before continuing
+  (e.g., "Should we use OAuth or magic links?", "Which database table should store X?").
+  Place them before the dev tasks that depend on the answer.
+
+  You may add extra QA tasks between dev tasks if a specific step needs early verification
+  (e.g., security-sensitive changes, schema migrations). But prefer fewer, broader QA tasks
+  over many narrow ones — QA should test the feature, not individual steps.
 
   ## Rules
 
@@ -133,12 +168,15 @@ defmodule Forge.PromptBuilder do
   Output ONLY valid JSON as your FINAL message:
   ```json
   {"tasks": [
-    {"title": "Add User schema", "prompt": "Create lib/app/user.ex with email and name fields...", "acceptance_criteria": "- User schema exists with email and name fields\n- Changeset validates required fields\n- mix test passes", "depends_on": null},
-    {"title": "Add auth controller", "prompt": "Create session_controller.ex...", "acceptance_criteria": "- POST /login returns 200 with valid credentials\n- POST /login returns 401 with invalid credentials", "depends_on": 0}
+    {"title": "Add User schema", "role": "dev", "prompt": "Create lib/app/user.ex with email and name fields...", "acceptance_criteria": "- User schema exists\\n- Changeset validates required fields", "depends_on": null},
+    {"title": "Add auth controller", "role": "dev", "prompt": "Create session_controller.ex...", "acceptance_criteria": "- POST /login returns 200 with valid credentials\\n- POST /login returns 401 with invalid credentials", "depends_on": 0},
+    {"title": "Test login flow", "role": "qa", "prompt": "Write tests covering the complete login flow: registration, login, session management...", "depends_on": 1},
+    {"title": "Review all changes", "role": "reviewer", "prompt": "Review the full diff (git diff main..HEAD) for bugs, security, and correctness.", "depends_on": 2}
   ]}
   ```
+  role is "dev", "qa", or "reviewer". Defaults to "dev" if omitted.
   depends_on is the 0-indexed position of another task in this list, or null for no dependency.
-  acceptance_criteria is a newline-separated list of testable conditions QA will verify.
+  acceptance_criteria is a newline-separated list of testable conditions (for dev tasks).
   """
 
   @doc "Build a prompt for a given role and task."
@@ -150,7 +188,9 @@ defmodule Forge.PromptBuilder do
 
     [
       "<role>\n#{base}\n</role>",
-      if(project_role != "", do: "<project-role-instructions>\n#{project_role}\n</project-role-instructions>"),
+      if(project_role != "",
+        do: "<project-role-instructions>\n#{project_role}\n</project-role-instructions>"
+      ),
       "<project-conventions>\n#{project.conventions}\n</project-conventions>",
       if(project_context, do: "<project-context>\n#{project_context}\n</project-context>"),
       if(skills_list != "", do: "<available-skills>\n#{skills_list}\n</available-skills>"),

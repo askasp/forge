@@ -1,0 +1,61 @@
+# Forge Pipeline — defines the workflow stages and transitions.
+#
+# Each [[stage]] is dispatched by role based on task dependencies.
+# The pipeline controls what happens AFTER each role completes.
+#
+# Transitions (on_success / on_failure):
+#   "next"       — continue to the next task
+#   "fix_cycle"  — agent inserts FIX @{fix_role} + Re-run @{this role} steps
+#   "stop"       — pause and wait for human intervention
+#   "<stage_id>" — jump to a specific stage
+#
+# Fix cycles:
+#   When a QA or review agent finds issues (VERDICT: NEEDS_FIXES), it creates:
+#     1. A FIX step assigned to fix_role (usually @dev)
+#     2. A Re-run step assigned to itself (to verify the fix)
+#   This loops up to max_cycles times before the orchestrator stops.
+#
+# To disable code review: remove the [[stage]] id = "review" block.
+# To change who fixes review issues: set fix_role = "senior_dev" on the review stage.
+# To allow more QA retries: increase max_cycles on the qa stage.
+
+#───────────────────────────────────────────────────────────────
+# Stage 1: Dev implements the task
+#───────────────────────────────────────────────────────────────
+[[stage]]
+id = "dev"
+role = "dev"
+on_success = "qa"           # after dev → QA tests it
+
+#───────────────────────────────────────────────────────────────
+# Stage 2: QA tests the implementation
+#   On NEEDS_FIXES: dev fixes → QA re-runs (up to 3 times)
+#───────────────────────────────────────────────────────────────
+[[stage]]
+id = "qa"
+role = "qa"
+on_success = "review"       # after QA passes → reviewer checks code
+on_failure = "fix_cycle"    # NEEDS_FIXES → FIX @dev + Re-run @qa
+fix_role = "dev"            # who writes the fix
+max_cycles = 3              # max QA ↔ dev iterations
+
+#───────────────────────────────────────────────────────────────
+# Stage 3: Code review checks quality
+#   On findings: dev fixes → reviewer re-checks (up to 2 times)
+#───────────────────────────────────────────────────────────────
+[[stage]]
+id = "review"
+role = "reviewer"
+on_success = "next"         # LGTM → continue to next step or PR point
+on_failure = "fix_cycle"    # findings → FIX @dev + Re-run @reviewer
+fix_role = "dev"            # who writes the fix
+max_cycles = 2              # max review ↔ dev iterations
+
+#───────────────────────────────────────────────────────────────
+# Stage 4: Human checkpoint (optional)
+#   Skipped in autopilot mode.
+#───────────────────────────────────────────────────────────────
+[[stage]]
+id = "human"
+role = "human"
+optional = true             # skipped in autopilot mode

@@ -67,14 +67,27 @@ defmodule Forge.Session do
         select: %{
           session_id: t.session_id,
           total: count(t.id),
-          done: count(fragment("CASE WHEN ? = 'done' THEN 1 END", t.state))
+          done: count(fragment("CASE WHEN ? = 'done' THEN 1 END", t.state)),
+          failed: count(fragment("CASE WHEN ? = 'failed' THEN 1 END", t.state)),
+          in_progress:
+            count(fragment("CASE WHEN ? IN ('assigned', 'in_progress') THEN 1 END", t.state)),
+          waiting_human:
+            count(
+              fragment(
+                "CASE WHEN ? = 'planned' AND ? = 'human' THEN 1 END",
+                t.state,
+                t.role
+              )
+            )
         }
       )
 
     query =
       from(s in Session,
-        join: p in Project, on: s.project_id == p.id,
-        left_join: tc in subquery(task_counts), on: tc.session_id == s.id,
+        join: p in Project,
+        on: s.project_id == p.id,
+        left_join: tc in subquery(task_counts),
+        on: tc.session_id == s.id,
         select: %{
           id: s.id,
           goal: s.goal,
@@ -85,7 +98,10 @@ defmodule Forge.Session do
           worktree_path: s.worktree_path,
           inserted_at: s.inserted_at,
           total: coalesce(tc.total, 0),
-          done: coalesce(tc.done, 0)
+          done: coalesce(tc.done, 0),
+          failed: coalesce(tc.failed, 0),
+          in_progress: coalesce(tc.in_progress, 0),
+          waiting_human: coalesce(tc.waiting_human, 0)
         },
         order_by: [desc: s.inserted_at]
       )
@@ -137,13 +153,114 @@ defmodule Forge.Session do
     terminate_session_processes(session_id)
 
     case Repo.get(Session, session_id) do
-      nil -> :ok
+      nil ->
+        :ok
+
       session ->
         session |> Session.changeset(%{state: :paused}) |> Repo.update()
     end
 
     Logger.info("[Session] Stopped session #{session_id}")
     :ok
+  end
+
+  @doc "Push branch to remote and create a GitHub PR via `gh`."
+  def create_pr(session_id) do
+    session = Repo.get(Session, session_id) |> Repo.preload(:project)
+
+    if session && session.worktree_path && File.dir?(session.worktree_path) do
+      project_path = session.project.repo_path
+      branch = Path.basename(session.worktree_path)
+
+      # Push branch to remote
+      case System.cmd("git", ["push", "-u", "origin", branch],
+             cd: project_path,
+             stderr_to_stdout: true
+           ) do
+        {_, 0} ->
+          # Create PR with gh CLI
+          project = Forge.Project.load(project_path)
+
+          case System.cmd(
+                 "gh",
+                 [
+                   "pr",
+                   "create",
+                   "--base",
+                   project.base_branch,
+                   "--head",
+                   branch,
+                   "--title",
+                   session.goal,
+                   "--body",
+                   "Automated by Forge"
+                 ],
+                 cd: project_path,
+                 stderr_to_stdout: true
+               ) do
+            {output, 0} ->
+              pr_url = output |> String.trim()
+              Logger.info("[Session] Created PR: #{pr_url}")
+              {:ok, pr_url}
+
+            {output, _} ->
+              {:error, "gh pr create failed: #{String.trim(output)}"}
+          end
+
+        {output, _} ->
+          {:error, "git push failed: #{String.trim(output)}"}
+      end
+    else
+      {:error, "session or worktree not found"}
+    end
+  end
+
+  @doc "Merge worktree branch into main, delete worktree, mark session complete."
+  def merge_into_main(session_id) do
+    session = Repo.get(Session, session_id) |> Repo.preload(:project)
+
+    if session && session.worktree_path && File.dir?(session.worktree_path) do
+      project_path = session.project.repo_path
+      branch = Path.basename(session.worktree_path)
+      project = Forge.Project.load(project_path)
+      base = project.base_branch
+
+      # Terminate session processes first so worktree isn't in use
+      terminate_session_processes(session_id)
+
+      # Remove worktree (must happen before merge since git won't allow
+      # deleting a branch that has a worktree attached)
+      System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
+        cd: project_path,
+        stderr_to_stdout: true
+      )
+
+      # Ensure we're on the base branch before merging
+      System.cmd("git", ["checkout", base], cd: project_path, stderr_to_stdout: true)
+
+      # Merge branch into base
+      case System.cmd("git", ["merge", branch, "--no-ff", "-m", "Merge #{branch}"],
+             cd: project_path,
+             stderr_to_stdout: true
+           ) do
+        {_, 0} ->
+          # Delete the branch
+          System.cmd("git", ["branch", "-D", branch],
+            cd: project_path,
+            stderr_to_stdout: true
+          )
+
+          # Mark session complete
+          session |> Session.changeset(%{state: :complete}) |> Repo.update()
+          Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
+          :ok
+
+        {output, _} ->
+          {:error, "merge failed: #{String.trim(output)}"}
+      end
+    else
+      {:error, "session or worktree not found"}
+    end
   end
 
   @doc "Delete a session: stop processes, remove worktree, mark complete."
@@ -185,8 +302,12 @@ defmodule Forge.Session do
     child_spec = {Forge.Session.Supervisor, session: session, project: project}
 
     case DynamicSupervisor.start_child(Forge.SessionSupervisor, child_spec) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
+      {:ok, _} ->
+        :ok
+
+      {:error, {:already_started, _}} ->
+        :ok
+
       {:error, reason} ->
         Logger.error("[Session] Failed to start supervisor for #{session.id}: #{inspect(reason)}")
         {:error, reason}
@@ -216,7 +337,8 @@ defmodule Forge.Session do
   end
 
   defp setup_worktree(worktree_path) do
-    parent = worktree_path |> String.replace(~r/\.worktrees\/.*$/, "") |> String.trim_trailing("/")
+    parent =
+      worktree_path |> String.replace(~r/\.worktrees\/.*$/, "") |> String.trim_trailing("/")
 
     for subdir <- ["", "backend", "frontend", "backoffice"] do
       source = Path.join([parent, subdir, "node_modules"])
@@ -229,17 +351,20 @@ defmodule Forge.Session do
     end
   end
 
+  @stop_words ~w(the a an and or but in on at to for of is it we should also with this that from into when have has been be can will)
+
   defp generate_session_id(goal) do
     slug =
       goal
       |> String.downcase()
       |> String.replace(~r/[^a-z0-9\s]/, "")
       |> String.split()
-      |> Enum.take(5)
+      |> Enum.reject(&(&1 in @stop_words))
+      |> Enum.take(6)
       |> Enum.join("-")
-      |> String.slice(0, 30)
+      |> String.slice(0, 40)
 
-    suffix = :erlang.system_time(:millisecond) |> rem(100_000) |> to_string()
+    suffix = :erlang.system_time(:millisecond) |> rem(10_000) |> to_string()
     "#{slug}-#{suffix}"
   end
 
@@ -257,7 +382,10 @@ defmodule Forge.Session do
         )
 
       if status != 0 do
-        System.cmd("git", ["branch", branch, base_branch], cd: project_path, stderr_to_stdout: true)
+        System.cmd("git", ["branch", branch, base_branch],
+          cd: project_path,
+          stderr_to_stdout: true
+        )
       end
 
       case System.cmd("git", ["worktree", "add", worktree_dir, branch],

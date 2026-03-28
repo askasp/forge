@@ -60,16 +60,22 @@ defmodule Forge.Session.AgentRunner do
   @impl true
   def handle_info(:start_agent, state) do
     # Write prompt to temp file
+    broadcast_output(state, ":: writing prompt file")
     forge_dir = Path.join(state.workdir, ".forge")
     File.mkdir_p!(forge_dir)
     prompt_path = Path.join(forge_dir, "prompt-#{state.task.role}")
     File.write!(prompt_path, state.prompt)
 
     # Write MCP config
+    broadcast_output(state, ":: configuring MCP")
     write_mcp_settings(state.workdir, state.session_id)
 
     # Spawn claude -p with stream-json for live output
-    cmd = "cat '#{prompt_path}' | claude -p --verbose --dangerously-skip-permissions --output-format stream-json 2>&1"
+    broadcast_output(state, ":: starting claude cli")
+
+    cmd =
+      "cat '#{prompt_path}' | claude -p --verbose --dangerously-skip-permissions --output-format stream-json 2>&1"
+
     Logger.info("[AgentRunner] @#{state.task.role} task=#{state.task.id} in #{state.workdir}")
 
     port =
@@ -140,10 +146,14 @@ defmodule Forge.Session.AgentRunner do
     })
 
     # Notify scheduler directly
-    send(state.scheduler, {:agent_done, state.task.id, %{
-      exit_code: status,
-      structured_output: structured
-    }})
+    send(
+      state.scheduler,
+      {:agent_done, state.task.id,
+       %{
+         exit_code: status,
+         structured_output: structured
+       }}
+    )
 
     # Broadcast for LiveView
     Phoenix.PubSub.broadcast(
@@ -164,30 +174,80 @@ defmodule Forge.Session.AgentRunner do
 
   defp parse_stream_json(line, state) do
     case Jason.decode(line) do
-      {:ok, %{"type" => "content_block_start", "index" => idx,
-              "content_block" => %{"type" => "tool_use", "name" => name}}} ->
-        tool_blocks = Map.put(state.tool_blocks, idx, %{name: name, input_json: ""})
+      {:ok,
+       %{
+         "type" => "content_block_start",
+         "index" => idx,
+         "content_block" => %{"type" => "tool_use", "name" => name}
+       }} ->
+        tool_blocks =
+          Map.put(state.tool_blocks, idx, %{
+            name: name,
+            input_json: "",
+            hint_sent: false,
+            started_at: System.monotonic_time(:millisecond)
+          })
+
         {tool_hint(name), %{state | tool_blocks: tool_blocks}}
+
+      {:ok,
+       %{
+         "type" => "content_block_start",
+         "content_block" => %{"type" => "thinking"}
+       }} ->
+        {":: thinking...", state}
 
       {:ok, %{"type" => "content_block_start"}} ->
         {nil, state}
 
-      {:ok, %{"type" => "content_block_delta", "index" => idx,
-              "delta" => %{"type" => "input_json_delta", "partial_json" => json}}} ->
+      {:ok,
+       %{
+         "type" => "content_block_delta",
+         "index" => idx,
+         "delta" => %{"type" => "input_json_delta", "partial_json" => json}
+       }} ->
         case Map.get(state.tool_blocks, idx) do
-          %{input_json: existing} = block ->
-            tool_blocks = Map.put(state.tool_blocks, idx, %{block | input_json: existing <> json})
-            {nil, %{state | tool_blocks: tool_blocks}}
+          %{input_json: existing, name: name, hint_sent: hint_sent} = block ->
+            new_json = existing <> json
+            updated_block = %{block | input_json: new_json}
+
+            # Try to extract early detail (file path, command, etc.) before tool completes
+            {early_hint, updated_block} =
+              if hint_sent do
+                {nil, updated_block}
+              else
+                case extract_early_detail(name, new_json) do
+                  nil -> {nil, updated_block}
+                  detail -> {detail, %{updated_block | hint_sent: true}}
+                end
+              end
+
+            tool_blocks = Map.put(state.tool_blocks, idx, updated_block)
+            {early_hint, %{state | tool_blocks: tool_blocks}}
 
           nil ->
             {nil, state}
         end
+
+      {:ok, %{"type" => "content_block_delta", "delta" => %{"type" => "thinking_delta"}}} ->
+        {nil, state}
 
       {:ok, %{"type" => "content_block_delta", "delta" => %{"text" => text}}} ->
         {text, state}
 
       {:ok, %{"type" => "content_block_stop", "index" => idx}} ->
         case Map.pop(state.tool_blocks, idx) do
+          {%{name: name, input_json: json, started_at: started_at}, remaining_blocks} ->
+            elapsed_ms = System.monotonic_time(:millisecond) - started_at
+            summary = format_tool_summary(name, json)
+
+            summary =
+              if elapsed_ms > 1000,
+                do: "#{summary} (#{div(elapsed_ms, 1000)}s)",
+                else: summary
+
+            {summary, %{state | tool_blocks: remaining_blocks}}
+
           {%{name: name, input_json: json}, remaining_blocks} ->
             summary = format_tool_summary(name, json)
             {summary, %{state | tool_blocks: remaining_blocks}}
@@ -199,10 +259,12 @@ defmodule Forge.Session.AgentRunner do
       {:ok, %{"type" => "result", "result" => result}} when is_binary(result) ->
         {result, %{state | final_result: result}}
 
-      {:ok, %{"type" => "result", "subtype" => "success", "result" => result}} when is_binary(result) ->
+      {:ok, %{"type" => "result", "subtype" => "success", "result" => result}}
+      when is_binary(result) ->
         {result, %{state | final_result: result}}
 
-      {:ok, %{"type" => "assistant", "message" => %{"content" => content}}} when is_list(content) ->
+      {:ok, %{"type" => "assistant", "message" => %{"content" => content}}}
+      when is_list(content) ->
         text =
           content
           |> Enum.map(fn
@@ -214,7 +276,8 @@ defmodule Forge.Session.AgentRunner do
 
         {if(text == "", do: nil, else: text), state}
 
-      {:ok, %{"type" => "assistant", "content" => content}} when is_binary(content) and content != "" ->
+      {:ok, %{"type" => "assistant", "content" => content}}
+      when is_binary(content) and content != "" ->
         {content, state}
 
       {:ok, decoded} ->
@@ -354,8 +417,12 @@ defmodule Forge.Session.AgentRunner do
 
       tool ->
         case Map.to_list(input) do
-          [] -> "-> #{tool}"
-          [{_k, v}] when is_binary(v) -> "-> #{tool}: #{truncate(v, 80)}"
+          [] ->
+            "-> #{tool}"
+
+          [{_k, v}] when is_binary(v) ->
+            "-> #{tool}: #{truncate(v, 80)}"
+
           pairs ->
             summary =
               pairs
@@ -380,6 +447,62 @@ defmodule Forge.Session.AgentRunner do
 
   defp truncate(str, max) when byte_size(str) <= max, do: str
   defp truncate(str, max), do: String.slice(str, 0, max) <> "..."
+
+  # ── Early Tool Detail Extraction ────────────────────────────────
+
+  defp extract_early_detail("Read", partial_json) do
+    case Regex.run(~r/"file_path"\s*:\s*"([^"]+)"/, partial_json) do
+      [_, path] -> "  reading #{shorten_path(path)}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail("Edit", partial_json) do
+    case Regex.run(~r/"file_path"\s*:\s*"([^"]+)"/, partial_json) do
+      [_, path] -> "  editing #{shorten_path(path)}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail("Write", partial_json) do
+    case Regex.run(~r/"file_path"\s*:\s*"([^"]+)"/, partial_json) do
+      [_, path] -> "  writing #{shorten_path(path)}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail("Bash", partial_json) do
+    case Regex.run(~r/"command"\s*:\s*"([^"]{1,80})/, partial_json) do
+      [_, cmd] -> "  $ #{cmd}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail("Grep", partial_json) do
+    case Regex.run(~r/"pattern"\s*:\s*"([^"]+)"/, partial_json) do
+      [_, pattern] -> "  searching for #{pattern}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail("Glob", partial_json) do
+    case Regex.run(~r/"pattern"\s*:\s*"([^"]+)"/, partial_json) do
+      [_, pattern] -> "  finding #{pattern}"
+      _ -> nil
+    end
+  end
+
+  defp extract_early_detail(_, _), do: nil
+
+  # ── Broadcast Helper ──────────────────────────────────────────
+
+  defp broadcast_output(state, text) do
+    Phoenix.PubSub.broadcast(
+      Forge.PubSub,
+      "session:#{state.session_id}",
+      {:agent_output, state.task.id, text}
+    )
+  end
 
   # ── Private ────────────────────────────────────────────────────
 

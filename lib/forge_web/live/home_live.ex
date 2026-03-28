@@ -73,8 +73,13 @@ defmodule ForgeWeb.HomeLive do
                 class="w-full bg-transparent border-b-2 border-base-content px-0 py-3 font-mono text-sm focus:outline-none focus:border-b-4 placeholder:text-base-content/20"
               />
               <%!-- Suggestions dropdown --%>
-              <div :if={@suggestions != [] && @project_path == "" || (@suggestions != [] && @project_path != "" && !@scan)}
-                class="absolute top-full left-0 right-0 border border-base-content/20 bg-base-100 z-10 max-h-48 overflow-y-auto">
+              <div
+                :if={
+                  (@suggestions != [] && @project_path == "") ||
+                    (@suggestions != [] && @project_path != "" && !@scan)
+                }
+                class="absolute top-full left-0 right-0 border border-base-content/20 bg-base-100 z-10 max-h-48 overflow-y-auto"
+              >
                 <button
                   :for={path <- @suggestions}
                   type="button"
@@ -86,7 +91,10 @@ defmodule ForgeWeb.HomeLive do
                 </button>
               </div>
             </div>
-            <button type="submit" class="border-2 border-base-content px-5 py-2 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100">
+            <button
+              type="submit"
+              class="border-2 border-base-content px-5 py-2 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100"
+            >
               Scan
             </button>
           </form>
@@ -119,12 +127,12 @@ defmodule ForgeWeb.HomeLive do
             <form phx-submit="start_session" class="space-y-6">
               <div>
                 <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
-                  Goal
+                  Task
                 </label>
                 <textarea
                   name="goal"
                   rows="3"
-                  placeholder="Describe what you want to build..."
+                  placeholder="What do you want done?"
                   class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
                 >{@goal}</textarea>
               </div>
@@ -136,14 +144,20 @@ defmodule ForgeWeb.HomeLive do
                 </label>
                 <div class="flex gap-0">
                   <label
-                    :for={{level, label, desc} <- [
-                      {"manual", "Manual", "Human approves each phase. Stops at PR points and questions."},
-                      {"supervised", "Supervised", "Review the plan, then cruise. Skips PR points. Auto-resolves questions."},
-                      {"autopilot", "Autopilot", "Fully autonomous. Iterates until all tasks are done."}
-                    ]}
+                    :for={
+                      {level, label, desc} <- [
+                        {"manual", "Manual",
+                         "Human approves each phase. Stops at PR points and questions."},
+                        {"supervised", "Supervised",
+                         "Review the plan, then cruise. Skips PR points. Auto-resolves questions."},
+                        {"autopilot", "Autopilot",
+                         "Fully autonomous. Iterates until all tasks are done."}
+                      ]
+                    }
                     class={[
                       "flex-1 cursor-pointer border-2 px-4 py-3 transition-colors duration-100 -ml-[2px] first:ml-0",
-                      @automation == level && "border-base-content bg-base-content text-base-100 z-10 relative",
+                      @automation == level &&
+                        "border-base-content bg-base-content text-base-100 z-10 relative",
                       @automation != level && "border-base-content/20 hover:border-base-content/50"
                     ]}
                   >
@@ -156,30 +170,43 @@ defmodule ForgeWeb.HomeLive do
                       phx-value-level={level}
                       class="sr-only"
                     />
-                    <div class="font-mono text-[11px] tracking-widest uppercase font-bold">{label}</div>
+                    <div class="font-mono text-[11px] tracking-widest uppercase font-bold">
+                      {label}
+                    </div>
                     <div class={[
                       "text-[10px] mt-1 leading-snug",
                       @automation == level && "text-base-100/60",
                       @automation != level && "text-base-content/40"
-                    ]}>{desc}</div>
+                    ]}>
+                      {desc}
+                    </div>
                   </label>
                 </div>
               </div>
 
-              <button type="submit" class="bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100">
+              <button
+                type="submit"
+                class="bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100"
+              >
                 Start Session &rarr;
               </button>
             </form>
           </div>
 
           <%!-- Config summary (collapsed for returning projects) --%>
-          <div :if={@config_saved && @config_collapsed} class="border-t border-base-content/10 pt-4 mb-6">
+          <div
+            :if={@config_saved && @config_collapsed}
+            class="border-t border-base-content/10 pt-4 mb-6"
+          >
             <div class="flex items-center justify-between">
               <div class="font-mono text-xs text-base-content/40 flex items-center gap-4">
                 <span :if={@selected_skills != []}>{length(@selected_skills)} skills</span>
                 <span :if={@test_command != ""}>{@test_command}</span>
               </div>
-              <button phx-click="toggle_config" class="font-mono text-[10px] tracking-widest uppercase text-base-content/30 hover:text-base-content cursor-pointer">
+              <button
+                phx-click="toggle_config"
+                class="font-mono text-[10px] tracking-widest uppercase text-base-content/30 hover:text-base-content cursor-pointer"
+              >
                 Configure
               </button>
             </div>
@@ -190,22 +217,35 @@ defmodule ForgeWeb.HomeLive do
             <%!-- What was found --%>
             <div class="grid grid-cols-2 gap-6 mb-8 text-xs">
               <div>
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">CLAUDE.md</h3>
+                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">
+                  CLAUDE.md
+                </h3>
                 <div :for={md <- @scan.claude_mds} class="py-0.5 font-mono">{md}</div>
               </div>
               <div>
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">Skills ({length(@scan.skills)})</h3>
-                <div :for={skill <- Enum.take(@scan.skills, 6)} class="py-0.5 font-mono">{skill.name}</div>
-                <div :if={length(@scan.skills) > 6} class="text-base-content/30">+{length(@scan.skills) - 6} more</div>
+                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">
+                  Skills ({length(@scan.skills)})
+                </h3>
+                <div :for={skill <- Enum.take(@scan.skills, 6)} class="py-0.5 font-mono">
+                  {skill.name}
+                </div>
+                <div :if={length(@scan.skills) > 6} class="text-base-content/30">
+                  +{length(@scan.skills) - 6} more
+                </div>
               </div>
             </div>
 
             <%!-- Configuration form --%>
             <form phx-submit="save_config" phx-change="update_config" class="space-y-6 mb-8">
               <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">Skills</h3>
+                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
+                  Skills
+                </h3>
                 <div class="grid grid-cols-3 gap-x-4 gap-y-1">
-                  <label :for={skill <- @scan.skills} class="flex items-center gap-2 py-1 cursor-pointer hover:text-base-content text-base-content/60 transition-colors">
+                  <label
+                    :for={skill <- @scan.skills}
+                    class="flex items-center gap-2 py-1 cursor-pointer hover:text-base-content text-base-content/60 transition-colors"
+                  >
                     <input
                       type="checkbox"
                       name="skills[]"
@@ -219,43 +259,84 @@ defmodule ForgeWeb.HomeLive do
               </div>
 
               <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">Commands</h3>
+                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
+                  Commands
+                </h3>
                 <div class="space-y-3">
                   <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">Test command</label>
-                    <input type="text" name="test_command" value={@test_command} placeholder="bun test" class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20" />
+                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                      Test command
+                    </label>
+                    <input
+                      type="text"
+                      name="test_command"
+                      value={@test_command}
+                      placeholder="bun test"
+                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20"
+                    />
                   </div>
                   <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">Dev start</label>
-                    <input type="text" name="dev_start" value={@dev_start} placeholder="./dev.sh up -d" class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20" />
+                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                      Dev start
+                    </label>
+                    <input
+                      type="text"
+                      name="dev_start"
+                      value={@dev_start}
+                      placeholder="./dev.sh up -d"
+                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20"
+                    />
                   </div>
                 </div>
               </div>
 
               <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">Git</h3>
+                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
+                  Git
+                </h3>
                 <div class="grid grid-cols-2 gap-4">
                   <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">Branch prefix</label>
-                    <input type="text" name="branch_prefix" value={@branch_prefix} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                      Branch prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="branch_prefix"
+                      value={@branch_prefix}
+                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                    />
                   </div>
                   <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">Base branch</label>
-                    <input type="text" name="base_branch" value={@base_branch} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                      Base branch
+                    </label>
+                    <input
+                      type="text"
+                      name="base_branch"
+                      value={@base_branch}
+                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                    />
                   </div>
                 </div>
               </div>
 
               <div class="flex items-center gap-4">
-                <button type="submit" class={[
-                  "border-2 border-base-content px-8 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-colors duration-100",
-                  "hover:bg-base-content hover:text-base-100",
-                  @config_saved && "bg-base-content text-base-100"
-                ]}>
+                <button
+                  type="submit"
+                  class={[
+                    "border-2 border-base-content px-8 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-colors duration-100",
+                    "hover:bg-base-content hover:text-base-100",
+                    @config_saved && "bg-base-content text-base-100"
+                  ]}
+                >
                   {if @config_saved, do: "Saved", else: "Save Config"}
                 </button>
-                <button :if={@config_saved} type="button" phx-click="toggle_config"
-                  class="font-mono text-[10px] tracking-widest uppercase text-base-content/40 hover:text-base-content">
+                <button
+                  :if={@config_saved}
+                  type="button"
+                  phx-click="toggle_config"
+                  class="font-mono text-[10px] tracking-widest uppercase text-base-content/40 hover:text-base-content"
+                >
                   Collapse
                 </button>
               </div>
@@ -307,8 +388,17 @@ defmodule ForgeWeb.HomeLive do
                     class="px-3 py-3 text-base-content/20 hover:text-error transition-colors shrink-0"
                     title="Delete session and worktree"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      class="w-3.5 h-3.5"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                        clip-rule="evenodd"
+                      />
                     </svg>
                   </button>
                 </div>
@@ -395,8 +485,7 @@ defmodule ForgeWeb.HomeLive do
      |> assign(:test_command, params["test_command"] || "")
      |> assign(:dev_start, params["dev_start"] || "")
      |> assign(:branch_prefix, params["branch_prefix"] || "wt-")
-     |> assign(:base_branch, params["base_branch"] || "main")
-     |> assign(:config_saved, false)}
+     |> assign(:base_branch, params["base_branch"] || "main")}
   end
 
   def handle_event("save_config", params, socket) do
@@ -405,12 +494,13 @@ defmodule ForgeWeb.HomeLive do
     config = %{
       "project" => %{"name" => socket.assigns.scan.name},
       "skills" => %{"include" => skills},
-      "commands" => %{
-        "test" => params["test_command"],
-        "dev_start" => params["dev_start"]
-      }
-      |> Enum.reject(fn {_k, v} -> v == "" end)
-      |> Map.new(),
+      "commands" =>
+        %{
+          "test" => params["test_command"],
+          "dev_start" => params["dev_start"]
+        }
+        |> Enum.reject(fn {_k, v} -> v == "" end)
+        |> Map.new(),
       "git" => %{
         "branch_prefix" => params["branch_prefix"] || "wt-",
         "base_branch" => params["base_branch"] || "main"
@@ -438,13 +528,37 @@ defmodule ForgeWeb.HomeLive do
         {:noreply, assign(socket, :error, "Scan a project first")}
 
       goal == "" ->
-        {:noreply, assign(socket, :error, "Goal is required")}
+        {:noreply, assign(socket, :error, "Describe what you want done")}
 
       !socket.assigns.config_saved ->
-        {:noreply, assign(socket, :error, "Save config before starting")}
+        # Auto-save config for new projects so the user doesn't have to click Save first
+        config = %{
+          "project" => %{"name" => socket.assigns.scan.name},
+          "skills" => %{"include" => socket.assigns.selected_skills},
+          "commands" =>
+            %{"test" => socket.assigns.test_command, "dev_start" => socket.assigns.dev_start}
+            |> Enum.reject(fn {_k, v} -> v == "" end)
+            |> Map.new(),
+          "git" => %{
+            "branch_prefix" => socket.assigns.branch_prefix,
+            "base_branch" => socket.assigns.base_branch
+          }
+        }
+
+        ProjectScanner.save_config(socket.assigns.project_path, config)
+        automation = String.to_atom(socket.assigns.automation)
+
+        case Session.create_session(socket.assigns.project_path, goal, automation: automation) do
+          {:ok, session_id} ->
+            {:noreply, push_navigate(socket, to: ~p"/session/#{session_id}")}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :error, "Failed: #{reason}")}
+        end
 
       true ->
         automation = String.to_atom(socket.assigns.automation)
+
         case Session.create_session(socket.assigns.project_path, goal, automation: automation) do
           {:ok, session_id} ->
             {:noreply, push_navigate(socket, to: ~p"/session/#{session_id}")}
@@ -484,7 +598,10 @@ defmodule ForgeWeb.HomeLive do
          |> assign(:config_collapsed, scan.has_config)
          |> assign(:suggestions, [])
          |> assign(:known_projects, KnownProjects.list())
-         |> assign(:selected_skills, get_in(config, ["skills", "include"]) || Enum.map(scan.skills, & &1.name))
+         |> assign(
+           :selected_skills,
+           get_in(config, ["skills", "include"]) || Enum.map(scan.skills, & &1.name)
+         )
          |> assign(:test_command, get_in(config, ["commands", "test"]) || "")
          |> assign(:dev_start, get_in(config, ["commands", "dev_start"]) || "")
          |> assign(:branch_prefix, get_in(config, ["git", "branch_prefix"]) || "wt-")

@@ -6,11 +6,11 @@ defmodule Forge.Schemas.Project do
   @foreign_key_type :binary_id
 
   schema "projects" do
-    field :name, :string
-    field :repo_path, :string
-    field :pipeline_config, :map, default: %{}
+    field(:name, :string)
+    field(:repo_path, :string)
+    field(:pipeline_config, :map, default: %{})
 
-    has_many :sessions, Forge.Schemas.Session
+    has_many(:sessions, Forge.Schemas.Session)
 
     timestamps(type: :utc_datetime)
   end

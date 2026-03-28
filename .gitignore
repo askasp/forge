@@ -35,3 +35,7 @@ forge-*.tar
 npm-debug.log
 /assets/node_modules/
 
+.worktrees/
+
+.worktrees
+.worktrees/*

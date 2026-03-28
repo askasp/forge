@@ -50,7 +50,12 @@ defmodule ForgeWeb.ProjectLive do
       <div class="border-b border-base-content/10">
         <div class="max-w-3xl mx-auto px-8 py-4 flex items-baseline justify-between">
           <div class="flex items-baseline gap-4">
-            <a href={~p"/"} class="font-display text-xl font-bold tracking-tight hover:opacity-60 transition-opacity">Forge</a>
+            <a
+              href={~p"/"}
+              class="font-display text-xl font-bold tracking-tight hover:opacity-60 transition-opacity"
+            >
+              Forge
+            </a>
             <span class="text-base-content/20">/</span>
             <span class="font-mono text-sm">{@scan.name}</span>
           </div>
@@ -141,32 +146,61 @@ defmodule ForgeWeb.ProjectLive do
               <%!-- Role header row --%>
               <div class="flex items-center gap-4 px-5 py-3">
                 <%!-- Editing: inline name/type fields --%>
-                <form :if={@editing_roles} phx-submit="update_role" class="flex items-center gap-3 flex-1">
+                <form
+                  :if={@editing_roles}
+                  phx-submit="update_role"
+                  class="flex items-center gap-3 flex-1"
+                >
                   <input type="hidden" name="original_name" value={role.name} />
-                  <input type="text" name="name" value={role.name}
+                  <input
+                    type="text"
+                    name="name"
+                    value={role.name}
                     disabled={role.name in ["planner", "dev", "qa", "human"]}
-                    class="font-mono text-[10px] tracking-[0.15em] uppercase border border-base-content/20 px-1.5 py-0.5 w-20 text-center bg-transparent focus:outline-none focus:border-base-content disabled:opacity-50" />
-                  <select name="type" class="font-mono text-[10px] bg-transparent border border-base-content/20 px-1 py-0.5">
+                    class="font-mono text-[10px] tracking-[0.15em] uppercase border border-base-content/20 px-1.5 py-0.5 w-20 text-center bg-transparent focus:outline-none focus:border-base-content disabled:opacity-50"
+                  />
+                  <select
+                    name="type"
+                    class="font-mono text-[10px] bg-transparent border border-base-content/20 px-1 py-0.5"
+                  >
                     <option value="agent" selected={role.type == "agent"}>agent</option>
                     <option value="human" selected={role.type == "human"}>human</option>
                     <option value="script" selected={role.type == "script"}>script</option>
                   </select>
-                  <input :if={role.type == "script"} type="text" name="script" value={role.script || ""}
+                  <input
+                    :if={role.type == "script"}
+                    type="text"
+                    name="script"
+                    value={role.script || ""}
                     placeholder="path/to/script.sh"
-                    class="flex-1 bg-transparent border-b border-base-content/20 py-1 font-mono text-xs focus:outline-none focus:border-base-content" />
-                  <span :if={role.type != "script"} class="flex-1 font-mono text-[10px] text-base-content/30">
+                    class="flex-1 bg-transparent border-b border-base-content/20 py-1 font-mono text-xs focus:outline-none focus:border-base-content"
+                  />
+                  <span
+                    :if={role.type != "script"}
+                    class="flex-1 font-mono text-[10px] text-base-content/30"
+                  >
                     {if override_exists?(@scan, role.name), do: "custom prompt", else: "built-in"}
                   </span>
-                  <button type="submit" class="font-mono text-[9px] tracking-wider uppercase text-base-content/40 hover:text-base-content">save</button>
-                  <button :if={role.name not in ["planner", "dev", "qa", "human"]}
-                    type="button" phx-click="remove_role" phx-value-name={role.name}
-                    class="font-mono text-[9px] text-base-content/30 hover:text-base-content">
+                  <button
+                    type="submit"
+                    class="font-mono text-[9px] tracking-wider uppercase text-base-content/40 hover:text-base-content"
+                  >
+                    save
+                  </button>
+                  <button
+                    :if={role.name not in ["planner", "dev", "qa", "human"]}
+                    type="button"
+                    phx-click="remove_role"
+                    phx-value-name={role.name}
+                    class="font-mono text-[9px] text-base-content/30 hover:text-base-content"
+                  >
                     remove
                   </button>
                 </form>
 
                 <%!-- Read-only: clickable to expand --%>
-                <button :if={!@editing_roles}
+                <button
+                  :if={!@editing_roles}
                   phx-click="toggle_role_detail"
                   phx-value-role={role.name}
                   class="flex items-center gap-4 flex-1 text-left cursor-pointer group/row"
@@ -187,38 +221,59 @@ defmodule ForgeWeb.ProjectLive do
               </div>
 
               <%!-- Expanded detail: built-in prompt + override editor --%>
-              <div :if={@expanded_role == role.name && !@editing_roles} class="border-t border-base-content/10">
+              <div
+                :if={@expanded_role == role.name && !@editing_roles}
+                class="border-t border-base-content/10"
+              >
                 <%!-- Override (editable) --%>
-                <div :if={override = get_override(@scan, role.name)} class="px-5 py-4 border-b border-base-content/10 bg-base-content/3">
+                <div
+                  :if={override = get_override(@scan, role.name)}
+                  class="px-5 py-4 border-b border-base-content/10 bg-base-content/3"
+                >
                   <div class="flex items-baseline justify-between mb-2">
-                    <span class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40">Project Override</span>
-                    <span class="font-mono text-[10px] text-base-content/30">.forge/roles/{role.name}.md</span>
+                    <span class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40">
+                      Project Override
+                    </span>
+                    <span class="font-mono text-[10px] text-base-content/30">
+                      .forge/roles/{role.name}.md
+                    </span>
                   </div>
                   <form phx-submit="save_override" class="space-y-2">
                     <input type="hidden" name="role" value={role.name} />
-                    <textarea name="content" rows="10"
+                    <textarea
+                      name="content"
+                      rows="10"
                       class="w-full bg-transparent border border-base-content/20 p-3 font-mono text-xs leading-relaxed focus:outline-none focus:border-base-content"
                     >{override}</textarea>
-                    <button type="submit"
-                      class="font-mono text-[10px] tracking-widest uppercase border border-base-content px-3 py-1 hover:bg-base-content hover:text-base-100 transition-colors duration-100">
+                    <button
+                      type="submit"
+                      class="font-mono text-[10px] tracking-widest uppercase border border-base-content px-3 py-1 hover:bg-base-content hover:text-base-100 transition-colors duration-100"
+                    >
                       Save
                     </button>
                   </form>
                 </div>
 
                 <%!-- Built-in prompt (read-only) --%>
-                <div :if={builtin = Forge.PromptBuilder.builtin_prompt(String.to_existing_atom(role.name))} class="px-5 py-4">
+                <div
+                  :if={
+                    builtin = Forge.PromptBuilder.builtin_prompt(String.to_existing_atom(role.name))
+                  }
+                  class="px-5 py-4"
+                >
                   <details class="group">
                     <summary class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 cursor-pointer mb-2">
-                      Built-in prompt
-                      <span class="group-open:hidden">...</span>
+                      Built-in prompt <span class="group-open:hidden">...</span>
                     </summary>
                     <pre class="font-mono text-xs text-base-content/50 whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">{builtin}</pre>
                   </details>
                 </div>
 
                 <%!-- Create override button --%>
-                <div :if={!override_exists?(@scan, role.name)} class="px-5 py-3 border-t border-base-content/10">
+                <div
+                  :if={!override_exists?(@scan, role.name)}
+                  class="px-5 py-3 border-t border-base-content/10"
+                >
                   <button
                     phx-click="create_override"
                     phx-value-role={role.name}
@@ -232,24 +287,41 @@ defmodule ForgeWeb.ProjectLive do
           </div>
 
           <%!-- Add role (when editing) --%>
-          <form :if={@editing_roles} phx-submit="add_role" class="border-2 border-dashed border-base-content/20 p-5 space-y-4">
-            <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40">Add Role</h3>
+          <form
+            :if={@editing_roles}
+            phx-submit="add_role"
+            class="border-2 border-dashed border-base-content/20 p-5 space-y-4"
+          >
+            <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40">
+              Add Role
+            </h3>
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label class="font-mono text-[10px] text-base-content/50 block mb-1">Name</label>
-                <input type="text" name="name" value={@new_role_name} placeholder="security"
-                  class="w-full bg-transparent border-b border-base-content/30 py-1 font-mono text-sm focus:outline-none focus:border-base-content" />
+                <input
+                  type="text"
+                  name="name"
+                  value={@new_role_name}
+                  placeholder="security"
+                  class="w-full bg-transparent border-b border-base-content/30 py-1 font-mono text-sm focus:outline-none focus:border-base-content"
+                />
               </div>
               <div>
                 <label class="font-mono text-[10px] text-base-content/50 block mb-1">Type</label>
-                <select name="type" class="w-full bg-transparent border-b border-base-content/30 py-1 font-mono text-sm focus:outline-none">
+                <select
+                  name="type"
+                  class="w-full bg-transparent border-b border-base-content/30 py-1 font-mono text-sm focus:outline-none"
+                >
                   <option value="agent" selected={@new_role_type == "agent"}>agent</option>
                   <option value="human" selected={@new_role_type == "human"}>human</option>
                   <option value="script" selected={@new_role_type == "script"}>script</option>
                 </select>
               </div>
             </div>
-            <button type="submit" class="border border-base-content px-5 py-1.5 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100">
+            <button
+              type="submit"
+              class="border border-base-content px-5 py-1.5 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100"
+            >
               Add
             </button>
           </form>
@@ -291,7 +363,9 @@ defmodule ForgeWeb.ProjectLive do
             </div>
             <div class="col-span-2">
               <span class="font-mono text-[10px] text-base-content/40 uppercase">Skills</span>
-              <p class="font-mono mt-1">{if @selected_skills == [], do: "---", else: Enum.join(@selected_skills, ", ")}</p>
+              <p class="font-mono mt-1">
+                {if @selected_skills == [], do: "---", else: Enum.join(@selected_skills, ", ")}
+              </p>
             </div>
           </div>
 
@@ -299,38 +373,76 @@ defmodule ForgeWeb.ProjectLive do
           <form :if={@editing_settings} phx-submit="save_settings" class="space-y-6">
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="font-mono text-[10px] text-base-content/50 block mb-1">Test command</label>
-                <input type="text" name="test_command" value={@test_command} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                  Test command
+                </label>
+                <input
+                  type="text"
+                  name="test_command"
+                  value={@test_command}
+                  class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                />
               </div>
               <div>
                 <label class="font-mono text-[10px] text-base-content/50 block mb-1">Dev start</label>
-                <input type="text" name="dev_start" value={@dev_start} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                <input
+                  type="text"
+                  name="dev_start"
+                  value={@dev_start}
+                  class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                />
               </div>
             </div>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="font-mono text-[10px] text-base-content/50 block mb-1">Branch prefix</label>
-                <input type="text" name="branch_prefix" value={@branch_prefix} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                  Branch prefix
+                </label>
+                <input
+                  type="text"
+                  name="branch_prefix"
+                  value={@branch_prefix}
+                  class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                />
               </div>
               <div>
-                <label class="font-mono text-[10px] text-base-content/50 block mb-1">Base branch</label>
-                <input type="text" name="base_branch" value={@base_branch} class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content" />
+                <label class="font-mono text-[10px] text-base-content/50 block mb-1">
+                  Base branch
+                </label>
+                <input
+                  type="text"
+                  name="base_branch"
+                  value={@base_branch}
+                  class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
+                />
               </div>
             </div>
             <div>
               <label class="font-mono text-[10px] text-base-content/50 block mb-2">Skills</label>
               <div class="grid grid-cols-3 gap-x-4 gap-y-1">
-                <label :for={skill <- @scan.skills} class="flex items-center gap-2 py-1 cursor-pointer text-base-content/60 hover:text-base-content">
-                  <input type="checkbox" name="skills[]" value={skill.name} checked={skill.name in @selected_skills} class="accent-current" />
+                <label
+                  :for={skill <- @scan.skills}
+                  class="flex items-center gap-2 py-1 cursor-pointer text-base-content/60 hover:text-base-content"
+                >
+                  <input
+                    type="checkbox"
+                    name="skills[]"
+                    value={skill.name}
+                    checked={skill.name in @selected_skills}
+                    class="accent-current"
+                  />
                   <span class="font-mono text-xs">{skill.name}</span>
                 </label>
               </div>
             </div>
-            <button type="submit" class={[
-              "border-2 border-base-content px-8 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-colors duration-100",
-              "hover:bg-base-content hover:text-base-100",
-              @saved && "bg-base-content text-base-100"
-            ]}>
+            <button
+              type="submit"
+              class={[
+                "border-2 border-base-content px-8 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-colors duration-100",
+                "hover:bg-base-content hover:text-base-100",
+                @saved && "bg-base-content text-base-100"
+              ]}
+            >
               {if @saved, do: "Saved", else: "Save"}
             </button>
           </form>

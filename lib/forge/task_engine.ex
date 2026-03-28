@@ -91,7 +91,8 @@ defmodule Forge.TaskEngine do
   """
   def ready_tasks(session_id) do
     from(t in Task,
-      left_join: dep in Task, on: t.depends_on_id == dep.id,
+      left_join: dep in Task,
+      on: t.depends_on_id == dep.id,
       where: t.session_id == ^session_id,
       where: t.state == :planned,
       where: is_nil(t.depends_on_id) or dep.state == :done,
@@ -120,6 +121,34 @@ defmodule Forge.TaskEngine do
     |> Enum.reduce({0, 0}, fn task, {done, total} ->
       if task.state == :done, do: {done + 1, total + 1}, else: {done, total + 1}
     end)
+  end
+
+  @doc "Delete all planned tasks for a session (used for re-planning)."
+  def delete_planned_tasks(session_id) do
+    from(t in Task,
+      where: t.session_id == ^session_id,
+      where: t.state == :planned
+    )
+    |> Repo.delete_all()
+  end
+
+  @doc "Check if a task already has a follow-up task with the given role."
+  def has_followup_task?(task_id, role) do
+    from(t in Task,
+      where: t.depends_on_id == ^task_id,
+      where: t.role == ^role,
+      where: t.state != :failed
+    )
+    |> Repo.exists?()
+  end
+
+  @doc "Reparent planned tasks: move depends_on from old task to new task."
+  def reparent_dependents(old_task_id, new_task_id) do
+    from(t in Task,
+      where: t.depends_on_id == ^old_task_id,
+      where: t.state == :planned
+    )
+    |> Repo.update_all(set: [depends_on_id: new_task_id])
   end
 
   @doc "Fail any in_progress tasks for a session (used on restart to clean up orphans)."

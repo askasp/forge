@@ -29,7 +29,8 @@ defmodule Forge.ProjectContext do
   end
 
   @doc "Update a section of the project context."
-  def update_section(%__MODULE__{} = ctx, section, content) when section in ["architecture", "key_files"] do
+  def update_section(%__MODULE__{} = ctx, section, content)
+      when section in ["architecture", "key_files"] do
     context_dir = Path.join(ctx.project_path, ".forge/#{@context_dir}")
     File.mkdir_p!(context_dir)
     File.write!(Path.join(context_dir, "#{section}.md"), content)

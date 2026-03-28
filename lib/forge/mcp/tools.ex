@@ -12,7 +12,8 @@ defmodule Forge.MCP.Tools do
       },
       %{
         name: "forge_update_context",
-        description: "Update persistent project context (architecture, key files, learnings). Used by planner.",
+        description:
+          "Update persistent project context (architecture, key files, learnings). Used by planner.",
         input_schema: %{
           type: "object",
           properties: %{

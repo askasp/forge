@@ -1,0 +1,11 @@
+[project]
+name = "forge"
+
+[skills]
+include = [
+  
+]
+
+[git]
+base_branch = "main"
+branch_prefix = "wt-"

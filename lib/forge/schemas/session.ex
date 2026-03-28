@@ -6,13 +6,17 @@ defmodule Forge.Schemas.Session do
   @foreign_key_type :binary_id
 
   schema "sessions" do
-    field :worktree_path, :string
-    field :goal, :string
-    field :state, Ecto.Enum, values: [:active, :paused, :complete], default: :active
-    field :automation, Ecto.Enum, values: [:manual, :supervised, :autopilot], default: :supervised
+    field(:worktree_path, :string)
+    field(:goal, :string)
+    field(:state, Ecto.Enum, values: [:active, :paused, :complete], default: :active)
 
-    belongs_to :project, Forge.Schemas.Project
-    has_many :tasks, Forge.Schemas.Task
+    field(:automation, Ecto.Enum,
+      values: [:manual, :supervised, :autopilot],
+      default: :supervised
+    )
+
+    belongs_to(:project, Forge.Schemas.Project)
+    has_many(:tasks, Forge.Schemas.Task)
 
     timestamps(type: :utc_datetime)
   end

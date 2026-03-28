@@ -23,7 +23,9 @@ defmodule Forge.DiffParser do
   @doc "Get diff for a specific commit in a repo."
   def diff_for_commit(workdir, commit_hash) do
     case System.cmd("git", ["diff", "#{commit_hash}~1..#{commit_hash}"],
-           cd: workdir, stderr_to_stdout: true) do
+           cd: workdir,
+           stderr_to_stdout: true
+         ) do
       {output, 0} -> parse(output)
       {output, _} -> [{:error, output}]
     end
@@ -31,8 +33,7 @@ defmodule Forge.DiffParser do
 
   @doc "Get diff between HEAD and N commits back."
   def diff_head(workdir, n \\ 1) do
-    case System.cmd("git", ["diff", "HEAD~#{n}..HEAD"],
-           cd: workdir, stderr_to_stdout: true) do
+    case System.cmd("git", ["diff", "HEAD~#{n}..HEAD"], cd: workdir, stderr_to_stdout: true) do
       {output, 0} -> parse(output)
       {output, _} -> [{:error, output}]
     end
@@ -114,15 +115,33 @@ defmodule Forge.DiffParser do
             {[header | acc], old_start, new_start, a, r}
 
           String.starts_with?(line, "+") and not String.starts_with?(line, "+++") ->
-            l = %Line{type: :add, old_num: nil, new_num: new_n, content: String.slice(line, 1..-1//1)}
+            l = %Line{
+              type: :add,
+              old_num: nil,
+              new_num: new_n,
+              content: String.slice(line, 1..-1//1)
+            }
+
             {[l | acc], old_n, new_n + 1, a + 1, r}
 
           String.starts_with?(line, "-") and not String.starts_with?(line, "---") ->
-            l = %Line{type: :remove, old_num: old_n, new_num: nil, content: String.slice(line, 1..-1//1)}
+            l = %Line{
+              type: :remove,
+              old_num: old_n,
+              new_num: nil,
+              content: String.slice(line, 1..-1//1)
+            }
+
             {[l | acc], old_n + 1, new_n, a, r + 1}
 
           String.starts_with?(line, " ") ->
-            l = %Line{type: :context, old_num: old_n, new_num: new_n, content: String.slice(line, 1..-1//1)}
+            l = %Line{
+              type: :context,
+              old_num: old_n,
+              new_num: new_n,
+              content: String.slice(line, 1..-1//1)
+            }
+
             {[l | acc], old_n + 1, new_n + 1, a, r}
 
           true ->

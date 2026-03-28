@@ -123,8 +123,14 @@ defmodule Forge.Scheduler do
     {:noreply, maybe_dispatch(state)}
   end
 
-  # PubSub: task created or updated — re-evaluate dispatch
-  def handle_info({event, _task}, state) when event in [:task_created, :task_updated, :tasks_created] do
+  # PubSub: task created — re-evaluate dispatch
+  def handle_info({event, _data}, state) when event in [:task_created, :tasks_created] do
+    {:noreply, maybe_dispatch(state)}
+  end
+
+  # PubSub: task updated — check if a human task was completed, then dispatch
+  def handle_info({:task_updated, task}, state) do
+    state = maybe_handle_human_completion(task, state)
     {:noreply, maybe_dispatch(state)}
   end
 
@@ -143,14 +149,17 @@ defmodule Forge.Scheduler do
         exit_code = Map.get(result, :exit_code, 0)
         structured = Map.get(result, :structured_output)
 
-        if exit_code == 0 do
-          # Create follow-up tasks first (before broadcasting :done)
-          process_result(task, structured, state)
-          # Then transition — this broadcasts :task_updated to LiveView
-          TaskEngine.transition(task, :done, structured)
-        else
-          TaskEngine.fail_task(task, %{exit_code: exit_code, error: Map.get(result, :error)})
-        end
+        state =
+          if exit_code == 0 do
+            # Create follow-up tasks first (before broadcasting :done)
+            state = process_result(task, structured, state)
+            # Then transition — this broadcasts :task_updated to LiveView
+            TaskEngine.transition(task, :done, structured)
+            state
+          else
+            TaskEngine.fail_task(task, %{exit_code: exit_code, error: Map.get(result, :error)})
+            state
+          end
 
         {:noreply, maybe_dispatch(state)}
     end
@@ -204,12 +213,17 @@ defmodule Forge.Scheduler do
         state
 
       _ ->
+        # Transition to :assigned so it won't be re-dispatched
+        TaskEngine.transition(task, :assigned)
         broadcast(state.session_id, {:waiting_human, task})
         state
     end
   end
 
   defp dispatch_task(task, state) do
+    # Show progress immediately before any I/O
+    broadcast(state.session_id, {:agent_setup, task.id, task.role, "building prompt"})
+
     # Build prompt
     prompt = PromptBuilder.build(state.project, task.role, task.prompt)
 
@@ -218,6 +232,8 @@ defmodule Forge.Scheduler do
 
     # Create agent run record
     {:ok, agent_run} = TaskEngine.create_agent_run(task)
+
+    broadcast(state.session_id, {:agent_setup, task.id, task.role, "starting agent"})
 
     # Start AgentRunner under the session's AgentSupervisor
     agent_sup = Forge.Session.Supervisor.agent_sup_name(state.session_id)
@@ -244,14 +260,26 @@ defmodule Forge.Scheduler do
 
   # ── Pipeline Follow-Up Logic ───────────────────────────────────
 
+  # All process_* functions return updated state to thread cycle counts
+  # and pause flags back to the caller.
+
   defp process_result(task, result, state) do
+    # If agent is stuck and needs human input, create a human Q&A task
+    if needs_human?(result) do
+      create_human_question(task, result, state)
+    else
+      process_role_result(task, result, state)
+    end
+  end
+
+  defp process_role_result(task, result, state) do
     case task.role do
       :planner ->
         process_planner_result(result, state)
 
       role ->
         stage = Pipeline.stage_for_role(state.pipeline, role)
-        if stage, do: process_stage_result(task, result, stage, state)
+        if stage, do: process_stage_result(task, result, stage, state), else: state
     end
   end
 
@@ -260,8 +288,14 @@ defmodule Forge.Scheduler do
       case result do
         %{"tasks" => tasks} when is_list(tasks) ->
           Enum.map(tasks, fn t ->
+            role =
+              case t["role"] do
+                r when r in ["qa", "reviewer", "human"] -> String.to_existing_atom(r)
+                _ -> :dev
+              end
+
             %{
-              role: :dev,
+              role: role,
               title: t["title"] || "Untitled task",
               prompt: t["prompt"] || "",
               acceptance_criteria: t["acceptance_criteria"],
@@ -276,7 +310,46 @@ defmodule Forge.Scheduler do
 
     if tasks != [] do
       session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
-      TaskEngine.create_tasks(session, tasks)
+      {:ok, created_tasks} = TaskEngine.create_tasks(session, tasks)
+
+      # Safety net: if planner didn't include QA or review, auto-append them
+      has_qa = Enum.any?(tasks, &(&1.role == :qa))
+      has_review = Enum.any?(tasks, &(&1.role == :reviewer))
+      last_task = List.last(created_tasks)
+
+      if !has_qa and last_task do
+        {:ok, qa_task} =
+          TaskEngine.create_task(session, %{
+            role: :qa,
+            title: "QA: verify all changes",
+            prompt:
+              "Test and verify all the changes made in this session.\n\n" <>
+                "Check recent commits, write tests covering the new functionality,\n" <>
+                "and run the full test suite.",
+            depends_on_id: last_task.id
+          })
+
+        if !has_review do
+          TaskEngine.create_task(session, %{
+            role: :reviewer,
+            title: "Review: full diff against main",
+            prompt:
+              "Review ALL changes in this branch compared to the base branch.\n\n" <>
+                "Run: git diff main..HEAD\n\n" <>
+                "Review the complete changeset for bugs, security, and correctness.",
+            depends_on_id: qa_task.id
+          })
+        end
+      end
+    end
+
+    # Pause after planning in supervised/manual mode so user can review the plan
+    if tasks != [] and state.automation in [:supervised, :manual] do
+      Logger.info("[Scheduler] Pausing after planning for review (#{state.automation} mode)")
+      broadcast(state.session_id, {:scheduler_paused, state.session_id})
+      %{state | paused: true}
+    else
+      state
     end
   end
 
@@ -288,25 +361,32 @@ defmodule Forge.Scheduler do
         create_fix_cycle_tasks(task, result, stage, state)
 
       passed and is_binary(stage.on_success) ->
-        # Success → create next stage's task
+        # Success → create next stage's task (unless pre-created by pipeline)
         case Pipeline.stage_by_id(state.pipeline, stage.on_success) do
           nil ->
-            :ok
+            state
 
           next_stage ->
-            session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
+            if TaskEngine.has_followup_task?(task.id, next_stage.role) do
+              # Already pre-created at planning time — skip
+              state
+            else
+              session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
 
-            TaskEngine.create_task(session, %{
-              role: next_stage.role,
-              title: "#{next_stage.role}: #{task.title}",
-              prompt: build_followup_prompt(next_stage.role, task, result, state),
-              parent_task_id: task.id,
-              depends_on_id: task.id
-            })
+              TaskEngine.create_task(session, %{
+                role: next_stage.role,
+                title: "#{next_stage.role}: #{task.title}",
+                prompt: build_followup_prompt(next_stage.role, task, result, state),
+                parent_task_id: task.id,
+                depends_on_id: task.id
+              })
+
+              state
+            end
         end
 
       true ->
-        :ok
+        state
     end
   end
 
@@ -317,6 +397,7 @@ defmodule Forge.Scheduler do
     if current_count >= stage.max_cycles do
       Logger.warning("[Scheduler] Max fix cycles (#{stage.max_cycles}) reached for #{role_key}")
       broadcast(state.session_id, {:cycle_limit_reached, task.id, role_key})
+      state
     else
       session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
       issues = Map.get(result || %{}, "issues", [])
@@ -331,23 +412,29 @@ defmodule Forge.Scheduler do
         TaskEngine.create_task(session, %{
           role: stage.fix_role,
           title: "Fix: #{task.title}",
-          prompt: "Fix the issues found by #{role_key}:\n- #{issues_text}\n\nOriginal task: #{task.prompt}#{criteria_text}",
+          prompt:
+            "Fix the issues found by #{role_key}:\n- #{issues_text}\n\nOriginal task: #{task.prompt}#{criteria_text}",
           acceptance_criteria: criteria,
           parent_task_id: task.id,
           depends_on_id: task.id
         })
 
       # Create re-run task for the checking role
-      TaskEngine.create_task(session, %{
-        role: task.role,
-        title: "Re-check: #{task.title}",
-        prompt: build_followup_prompt(task.role, fix_task, nil, state),
-        parent_task_id: task.id,
-        depends_on_id: fix_task.id
-      })
+      {:ok, recheck_task} =
+        TaskEngine.create_task(session, %{
+          role: task.role,
+          title: "Re-check: #{task.title}",
+          prompt: build_followup_prompt(task.role, fix_task, nil, state),
+          parent_task_id: task.id,
+          depends_on_id: fix_task.id
+        })
 
-      # Update cycle count (in-memory only, resets on restart)
-      # This is fine since cycles are per-session
+      # Reparent: any planned tasks that depend on the failed task should now
+      # depend on the re-check instead (e.g., a pre-created review task)
+      TaskEngine.reparent_dependents(task.id, recheck_task.id)
+
+      # Increment cycle count
+      %{state | cycle_counts: Map.update(state.cycle_counts, role_key, 1, &(&1 + 1))}
     end
   end
 
@@ -378,12 +465,18 @@ defmodule Forge.Scheduler do
         ""
       end
 
-    base_prompt = "Review the changes from task: #{parent_task.title}#{context}#{criteria_section}"
+    base_prompt =
+      "Review the changes from task: #{parent_task.title}#{context}#{criteria_section}"
 
     case role do
-      :qa -> "#{base_prompt}\n\nRun tests and verify the implementation meets the acceptance criteria."
-      :reviewer -> "#{base_prompt}\n\nReview the code for quality, security, and correctness."
-      _ -> base_prompt
+      :qa ->
+        "#{base_prompt}\n\nRun tests and verify the implementation meets the acceptance criteria."
+
+      :reviewer ->
+        "#{base_prompt}\n\nReview the code for quality, security, and correctness."
+
+      _ ->
+        base_prompt
     end
   end
 
@@ -427,6 +520,70 @@ defmodule Forge.Scheduler do
       broadcast(state.session_id, {:session_complete, state.session_id})
     end
   end
+
+  # ── Human Q&A ─────────────────────────────────────────────────
+
+  defp needs_human?(result) do
+    is_map(result) and result["needs_human"] == true
+  end
+
+  # Agent is stuck — create a human task with its question.
+  # When the human responds, maybe_handle_human_completion creates a continuation.
+  defp create_human_question(task, result, state) do
+    session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
+    question = result["question"] || "The agent needs your input to continue."
+
+    TaskEngine.create_task(session, %{
+      role: :human,
+      title: "Question from @#{task.role}",
+      prompt: question,
+      parent_task_id: task.id,
+      depends_on_id: task.id
+    })
+
+    state
+  end
+
+  # When a human task completes, check if it was a question from an agent.
+  # If so, create a continuation task so the agent can resume with the answer.
+  defp maybe_handle_human_completion(%{role: :human, state: :done} = task, state) do
+    task = Forge.Repo.preload(task, [])
+
+    if task.parent_task_id do
+      case Forge.Repo.get(Forge.Schemas.Task, task.parent_task_id) do
+        %{role: role} = parent when role in [:dev, :qa, :reviewer] ->
+          session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
+          answer = format_human_answer(task.result)
+
+          TaskEngine.create_task(session, %{
+            role: parent.role,
+            title: "Continue: #{parent.title}",
+            prompt:
+              parent.prompt <>
+                "\n\nYou previously asked: #{task.prompt}\n" <>
+                "Human answered: #{answer}\n\n" <>
+                "Continue the task using this information.",
+            acceptance_criteria: parent.acceptance_criteria,
+            parent_task_id: task.id,
+            depends_on_id: task.id
+          })
+
+          state
+
+        _ ->
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_handle_human_completion(_, state), do: state
+
+  defp format_human_answer(nil), do: "(no response)"
+  defp format_human_answer(%{"response" => r}), do: r
+  defp format_human_answer(result) when is_map(result), do: inspect(result)
+  defp format_human_answer(result), do: to_string(result)
 
   defp broadcast(session_id, event) do
     Phoenix.PubSub.broadcast(Forge.PubSub, "session:#{session_id}", event)
