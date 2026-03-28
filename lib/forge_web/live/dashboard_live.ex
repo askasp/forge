@@ -185,6 +185,36 @@ defmodule ForgeWeb.DashboardLive do
               <div class="mt-4 border-t-4 border-base-content w-12" />
             </div>
 
+            <%!-- Merged banner --%>
+            <div
+              :if={@orchestrator_state == :merged}
+              class="mb-6 border-2 border-base-content p-6 bg-base-200"
+            >
+              <div class="flex items-center gap-3 mb-2">
+                <span class="font-mono text-[10px] tracking-[0.15em] uppercase border border-base-content px-2 py-0.5">
+                  Merged
+                </span>
+                <span class="text-sm">Branch merged into main</span>
+              </div>
+              <p class="text-xs text-base-content/50">
+                Worktree removed and branch cleaned up.
+              </p>
+            </div>
+
+            <%!-- Merge error --%>
+            <div
+              :if={assigns[:merge_error]}
+              class="mb-6 border-2 border-base-content/40 p-6 bg-base-200/50"
+            >
+              <div class="flex items-center gap-3 mb-2">
+                <span class="font-mono text-[10px] tracking-[0.15em] uppercase border-2 border-base-content px-2 py-0.5 font-bold">
+                  Error
+                </span>
+                <span class="text-sm">Merge failed</span>
+              </div>
+              <p class="font-mono text-xs text-base-content/60">{@merge_error}</p>
+            </div>
+
             <%!-- Planning card --%>
             <div
               :if={
@@ -844,6 +874,17 @@ defmodule ForgeWeb.DashboardLive do
     """
   end
 
+  defp render_footer(%{state: :merged} = assigns) do
+    ~H"""
+    <div class="flex gap-1">
+      <a href={~p"/"} class={@pri}>New Session</a>
+    </div>
+    <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
+      Merged into main
+    </div>
+    """
+  end
+
   defp render_footer(%{state: :complete} = assigns) do
     ~H"""
     <div class="flex gap-1">
@@ -1136,11 +1177,11 @@ defmodule ForgeWeb.DashboardLive do
       :ok ->
         {:noreply,
          socket
-         |> put_flash(:info, "Merged into main and cleaned up worktree")
-         |> push_navigate(to: ~p"/")}
+         |> assign(:orchestrator_state, :merged)
+         |> assign(:page_title, page_title(:merged, nil, 0, 0))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, reason)}
+        {:noreply, assign(socket, :merge_error, reason)}
     end
   end
 
@@ -1435,10 +1476,11 @@ defmodule ForgeWeb.DashboardLive do
   defp page_title(:stopped_error, _role, _done, _total), do: "!! Error"
   defp page_title(:stopped_human, _role, _done, _total), do: ">> Your Turn"
   defp page_title(:stopped_loop_limit, _role, _done, _total), do: "Loop Limit"
+  defp page_title(:merged, _role, _done, _total), do: "Merged"
   defp page_title(:complete, _role, done, total), do: "Done #{done}/#{total}"
   defp page_title(:paused, _role, _done, _total), do: "Paused"
   defp page_title(:planning_done, _role, _done, _total), do: "Plan Ready"
-  defp page_title(_state, _role, _done, _total), do: nil
+  defp page_title(_, _role, _done, _total), do: nil
 
   defp format_elapsed(nil), do: ""
 
@@ -1458,6 +1500,7 @@ defmodule ForgeWeb.DashboardLive do
   defp orchestrator_label(:stopped_error), do: "Error"
   defp orchestrator_label(:stopped_loop_limit), do: "Loop Limit"
   defp orchestrator_label(:complete), do: "Complete"
+  defp orchestrator_label(:merged), do: "Merged"
   defp orchestrator_label(state), do: state |> to_string() |> String.replace("_", " ")
 
   # ── Diff helpers ──────────────────────────────────────────────────
