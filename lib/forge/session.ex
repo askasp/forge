@@ -1,0 +1,276 @@
+defmodule Forge.Session do
+  @moduledoc """
+  Manages session lifecycle: creation, listing, and cleanup.
+  Each session corresponds to a git worktree where agents work.
+  State is persisted in Postgres via Ecto.
+  """
+  require Logger
+
+  alias Forge.Repo
+  alias Forge.Schemas.{Project, Session}
+  alias Forge.TaskEngine
+  import Ecto.Query
+
+  @doc "Create a new session: load project, create worktree, start processes, create planner task."
+  def create_session(project_path, goal, opts \\ []) do
+    automation = Keyword.get(opts, :automation, :supervised)
+    project = Forge.Project.load(project_path)
+
+    session_id_slug = generate_session_id(goal)
+    branch = "#{project.branch_prefix}#{session_id_slug}"
+
+    case create_worktree(project_path, branch, project.base_branch) do
+      {:ok, worktree_path} ->
+        # Find or create project in DB
+        db_project = find_or_create_project(project_path, project)
+
+        # Create session in DB
+        {:ok, session} =
+          %Session{}
+          |> Session.changeset(%{
+            project_id: db_project.id,
+            worktree_path: worktree_path,
+            goal: goal,
+            automation: automation
+          })
+          |> Repo.insert()
+
+        # Run install in worktree if package managers are present
+        setup_worktree(worktree_path)
+
+        # Start per-session supervisor (Scheduler + AgentSupervisor)
+        start_session_processes(session, project)
+
+        # Create initial planner task — Scheduler picks it up via PubSub
+        TaskEngine.create_task(session, %{
+          role: :planner,
+          title: "Plan: #{goal}",
+          prompt: goal
+        })
+
+        # Remember this project for autocomplete
+        Forge.KnownProjects.add(project_path)
+
+        Logger.info("[Session] Created session #{session.id} at #{worktree_path}")
+        {:ok, session.id}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc "List all sessions, optionally filtered by state."
+  def list_sessions(state_filter \\ nil) do
+    task_counts =
+      from(t in Forge.Schemas.Task,
+        group_by: t.session_id,
+        select: %{
+          session_id: t.session_id,
+          total: count(t.id),
+          done: count(fragment("CASE WHEN ? = 'done' THEN 1 END", t.state))
+        }
+      )
+
+    query =
+      from(s in Session,
+        join: p in Project, on: s.project_id == p.id,
+        left_join: tc in subquery(task_counts), on: tc.session_id == s.id,
+        select: %{
+          id: s.id,
+          goal: s.goal,
+          state: s.state,
+          automation: s.automation,
+          project_name: p.name,
+          repo_path: p.repo_path,
+          worktree_path: s.worktree_path,
+          inserted_at: s.inserted_at,
+          total: coalesce(tc.total, 0),
+          done: coalesce(tc.done, 0)
+        },
+        order_by: [desc: s.inserted_at]
+      )
+
+    query =
+      if state_filter do
+        where(query, [s], s.state == ^state_filter)
+      else
+        query
+      end
+
+    Repo.all(query)
+  end
+
+  @doc "Restore active sessions on startup."
+  def restore_sessions do
+    sessions =
+      from(s in Session, where: s.state == :active, preload: [:project])
+      |> Repo.all()
+
+    for session <- sessions do
+      if session.worktree_path && File.dir?(session.worktree_path) do
+        Logger.info("[Session] Restoring session #{session.id}")
+
+        # Fail any orphaned in-progress tasks
+        TaskEngine.fail_orphaned_tasks(session.id)
+
+        # Reload project config from disk
+        project = Forge.Project.load(session.project.repo_path)
+
+        # Restart session processes
+        start_session_processes(session, project)
+
+        Logger.info("[Session] Restored session #{session.id}")
+      else
+        Logger.info("[Session] Worktree gone for session #{session.id}, marking complete")
+
+        session
+        |> Session.changeset(%{state: :complete})
+        |> Repo.update()
+      end
+    end
+
+    Logger.info("[Session] Restore complete: #{length(sessions)} active session(s) found")
+  end
+
+  @doc "Stop a running session: terminate supervisor tree, mark paused."
+  def stop_session(session_id) do
+    terminate_session_processes(session_id)
+
+    case Repo.get(Session, session_id) do
+      nil -> :ok
+      session ->
+        session |> Session.changeset(%{state: :paused}) |> Repo.update()
+    end
+
+    Logger.info("[Session] Stopped session #{session_id}")
+    :ok
+  end
+
+  @doc "Delete a session: stop processes, remove worktree, mark complete."
+  def delete_session(session_id) do
+    session = Repo.get(Session, session_id) |> Repo.preload(:project)
+
+    if session do
+      terminate_session_processes(session_id)
+
+      # Remove worktree
+      if session.worktree_path && File.dir?(session.worktree_path) do
+        project_path = session.project.repo_path
+        branch = Path.basename(session.worktree_path)
+
+        case System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
+               cd: project_path,
+               stderr_to_stdout: true
+             ) do
+          {_, 0} ->
+            Logger.info("[Session] Removed worktree #{session.worktree_path}")
+            System.cmd("git", ["branch", "-D", branch], cd: project_path, stderr_to_stdout: true)
+
+          {output, _} ->
+            Logger.warning("[Session] Failed to remove worktree: #{output}")
+            File.rm_rf(session.worktree_path)
+        end
+      end
+
+      session |> Session.changeset(%{state: :complete}) |> Repo.update()
+      Logger.info("[Session] Deleted session #{session_id}")
+    end
+
+    :ok
+  end
+
+  # ── Private ──────────────────────────────────────────────────────
+
+  defp start_session_processes(session, project) do
+    child_spec = {Forge.Session.Supervisor, session: session, project: project}
+
+    case DynamicSupervisor.start_child(Forge.SessionSupervisor, child_spec) do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+      {:error, reason} ->
+        Logger.error("[Session] Failed to start supervisor for #{session.id}: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp terminate_session_processes(session_id) do
+    case Registry.lookup(Forge.SessionRegistry, {:session_sup, session_id}) do
+      [{pid, _}] -> DynamicSupervisor.terminate_child(Forge.SessionSupervisor, pid)
+      [] -> :ok
+    end
+  end
+
+  defp find_or_create_project(project_path, project) do
+    case Repo.get_by(Project, repo_path: project_path) do
+      nil ->
+        {:ok, db_project} =
+          %Project{}
+          |> Project.changeset(%{name: project.name, repo_path: project_path})
+          |> Repo.insert()
+
+        db_project
+
+      existing ->
+        existing
+    end
+  end
+
+  defp setup_worktree(worktree_path) do
+    parent = worktree_path |> String.replace(~r/\.worktrees\/.*$/, "") |> String.trim_trailing("/")
+
+    for subdir <- ["", "backend", "frontend", "backoffice"] do
+      source = Path.join([parent, subdir, "node_modules"])
+      target = Path.join([worktree_path, subdir, "node_modules"])
+
+      if File.dir?(source) and not File.exists?(target) do
+        File.ln_s!(source, target)
+        Logger.info("[Session] Symlinked #{subdir}/node_modules")
+      end
+    end
+  end
+
+  defp generate_session_id(goal) do
+    slug =
+      goal
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s]/, "")
+      |> String.split()
+      |> Enum.take(5)
+      |> Enum.join("-")
+      |> String.slice(0, 30)
+
+    suffix = :erlang.system_time(:millisecond) |> rem(100_000) |> to_string()
+    "#{slug}-#{suffix}"
+  end
+
+  defp create_worktree(project_path, branch, base_branch) do
+    worktree_dir = Path.join(project_path, ".worktrees/#{branch}")
+
+    if File.dir?(worktree_dir) do
+      Logger.info("[Session] Reusing existing worktree at #{worktree_dir}")
+      {:ok, worktree_dir}
+    else
+      {_, status} =
+        System.cmd("git", ["show-ref", "--verify", "--quiet", "refs/heads/#{branch}"],
+          cd: project_path,
+          stderr_to_stdout: true
+        )
+
+      if status != 0 do
+        System.cmd("git", ["branch", branch, base_branch], cd: project_path, stderr_to_stdout: true)
+      end
+
+      case System.cmd("git", ["worktree", "add", worktree_dir, branch],
+             cd: project_path,
+             stderr_to_stdout: true
+           ) do
+        {_output, 0} ->
+          Logger.info("[Session] Created worktree at #{worktree_dir}")
+          {:ok, worktree_dir}
+
+        {output, _} ->
+          {:error, "git worktree failed: #{output}"}
+      end
+    end
+  end
+end

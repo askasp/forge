@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# forge-mcp — Lightweight MCP adapter for Forge
+#
+# Agents read/write .forge/TASKS.md directly for task management.
+# This MCP server only provides supplementary tools:
+#   - forge_get_project_info — project conventions and test commands
+#   - forge_checkpoint — crash recovery checkpoints
+#   - forge_update_context — persistent project memory
+#
+# Usage: forge-mcp --url http://localhost:4000 --session SESSION_ID
+
+set -euo pipefail
+
+FORGE_URL="${FORGE_URL:-http://localhost:4000}"
+SESSION_ID=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --url) FORGE_URL="$2"; shift 2 ;;
+    --session) SESSION_ID="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+API="${FORGE_URL}/api/mcp"
+SESSION_HEADER=""
+[ -n "$SESSION_ID" ] && SESSION_HEADER="-H X-Forge-Session:${SESSION_ID}"
+
+# ── HTTP with retry ──────────────────────────────────────────────
+
+http_get() {
+  local url="$1"
+  for attempt in 1 2 3; do
+    if result=$(curl -sf $SESSION_HEADER "$url" 2>/dev/null); then
+      echo "$result"; return 0
+    fi
+    [ "$attempt" -lt 3 ] && sleep 1
+  done
+  echo '{"error":"connection failed after 3 retries"}'
+}
+
+http_post() {
+  local url="$1" data="$2"
+  for attempt in 1 2 3; do
+    if result=$(curl -sf -X POST $SESSION_HEADER \
+      -H "Content-Type: application/json" -d "$data" "$url" 2>/dev/null); then
+      echo "$result"; return 0
+    fi
+    [ "$attempt" -lt 3 ] && sleep 1
+  done
+  echo '{"error":"connection failed after 3 retries"}'
+}
+
+# ── MCP protocol ─────────────────────────────────────────────────
+
+handle_initialize() {
+  echo "{\"jsonrpc\":\"2.0\",\"id\":$1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"forge\",\"version\":\"0.3.0\"}}}"
+}
+
+TOOLS_CACHE=""
+
+handle_tools_list() {
+  if [ -z "$TOOLS_CACHE" ]; then
+    local dynamic
+    dynamic=$(curl -sf $SESSION_HEADER "${API}/tools" 2>/dev/null) || dynamic=""
+    if [ -n "$dynamic" ] && echo "$dynamic" | jq -e '.tools' >/dev/null 2>&1; then
+      TOOLS_CACHE="$dynamic"
+    else
+      TOOLS_CACHE='{"tools":[
+  {"name":"forge_get_project_info","description":"Get project conventions, skills, and test commands.","inputSchema":{"type":"object","properties":{},"required":[]}},
+  {"name":"forge_checkpoint","description":"Save progress checkpoint for crash recovery.","inputSchema":{"type":"object","properties":{"step_index":{"type":"integer"},"done":{"type":"string"},"remaining":{"type":"string"},"approach":{"type":"string"},"files_modified":{"type":"array","items":{"type":"string"}}},"required":["step_index","done","remaining"]}},
+  {"name":"forge_update_context","description":"Update persistent project context (architecture, key files, learnings).","inputSchema":{"type":"object","properties":{"section":{"type":"string","enum":["architecture","key_files","learnings"]},"content":{"type":"string"}},"required":["section","content"]}}
+]}'
+    fi
+  fi
+  echo "{\"jsonrpc\":\"2.0\",\"id\":$1,\"result\":${TOOLS_CACHE}}"
+}
+
+# ── Tool dispatch ────────────────────────────────────────────────
+
+handle_tool_call() {
+  local id="$1" name="$2" args="$3"
+  local result=""
+
+  case "$name" in
+    forge_get_project_info)
+      result=$(http_get "${API}/get_project_info")
+      ;;
+    forge_checkpoint)
+      result=$(http_post "${API}/checkpoint" "$args")
+      ;;
+    forge_update_context)
+      result=$(http_post "${API}/update_context" "$args")
+      ;;
+    *)
+      result="{\"error\":\"unknown tool: ${name}\"}"
+      ;;
+  esac
+
+  echo "{\"jsonrpc\":\"2.0\",\"id\":${id},\"result\":{\"content\":[{\"type\":\"text\",\"text\":$(echo "$result" | jq -c '@json')}]}}"
+}
+
+# ── Main loop ────────────────────────────────────────────────────
+
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+
+  method=$(echo "$line" | jq -r '.method // empty')
+  id=$(echo "$line" | jq -r '.id // 0')
+
+  case "$method" in
+    initialize)          handle_initialize "$id" ;;
+    notifications/initialized) ;;
+    tools/list)          handle_tools_list "$id" ;;
+    tools/call)
+      name=$(echo "$line" | jq -r '.params.name')
+      args=$(echo "$line" | jq -c '.params.arguments // {}')
+      handle_tool_call "$id" "$name" "$args"
+      ;;
+    *)
+      echo "{\"jsonrpc\":\"2.0\",\"id\":${id},\"error\":{\"code\":-32601,\"message\":\"Unknown method: ${method}\"}}"
+      ;;
+  esac
+done

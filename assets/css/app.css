@@ -1,0 +1,114 @@
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/forge_web";
+
+@plugin "../vendor/heroicons";
+
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* ── Monochrome Light (default) ────────────────────────────────── */
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(97% 0 0);
+  --color-base-300: oklch(90% 0 0);
+  --color-base-content: oklch(0% 0 0);
+  --color-primary: oklch(0% 0 0);
+  --color-primary-content: oklch(100% 0 0);
+  --color-secondary: oklch(40% 0 0);
+  --color-secondary-content: oklch(100% 0 0);
+  --color-accent: oklch(0% 0 0);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(30% 0 0);
+  --color-neutral-content: oklch(100% 0 0);
+  --color-info: oklch(0% 0 0);
+  --color-info-content: oklch(100% 0 0);
+  --color-success: oklch(0% 0 0);
+  --color-success-content: oklch(100% 0 0);
+  --color-warning: oklch(0% 0 0);
+  --color-warning-content: oklch(100% 0 0);
+  --color-error: oklch(0% 0 0);
+  --color-error-content: oklch(100% 0 0);
+  --radius-selector: 0;
+  --radius-field: 0;
+  --radius-box: 0;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ── Monochrome Dark (inverted) ────────────────────────────────── */
+@plugin "../vendor/daisyui-theme" {
+  name: "dark";
+  default: false;
+  prefersdark: false;
+  color-scheme: "dark";
+  --color-base-100: oklch(13% 0 0);
+  --color-base-200: oklch(19% 0 0);
+  --color-base-300: oklch(28% 0 0);
+  --color-base-content: oklch(94% 0 0);
+  --color-primary: oklch(93% 0 0);
+  --color-primary-content: oklch(10% 0 0);
+  --color-secondary: oklch(65% 0 0);
+  --color-secondary-content: oklch(10% 0 0);
+  --color-accent: oklch(93% 0 0);
+  --color-accent-content: oklch(10% 0 0);
+  --color-neutral: oklch(75% 0 0);
+  --color-neutral-content: oklch(10% 0 0);
+  --color-info: oklch(93% 0 0);
+  --color-info-content: oklch(10% 0 0);
+  --color-success: oklch(93% 0 0);
+  --color-success-content: oklch(10% 0 0);
+  --color-warning: oklch(93% 0 0);
+  --color-warning-content: oklch(10% 0 0);
+  --color-error: oklch(93% 0 0);
+  --color-error-content: oklch(10% 0 0);
+  --radius-selector: 0;
+  --radius-field: 0;
+  --radius-box: 0;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* ── Forge Typography ──────────────────────────────────────────── */
+
+body {
+  font-family: "Source Serif 4", Georgia, serif;
+}
+
+.font-display {
+  font-family: "Playfair Display", Georgia, serif;
+}
+
+.font-mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* Subtle paper texture */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  opacity: 0.015;
+}
