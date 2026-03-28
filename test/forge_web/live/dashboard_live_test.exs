@@ -147,6 +147,55 @@ defmodule ForgeWeb.DashboardLiveTest do
     end
   end
 
+  describe "cycle_automation does not dispatch tasks" do
+    test "cycling to autopilot does not auto-approve a planned human task", %{
+      conn: conn,
+      session: session
+    } do
+      # Create a human task in :planned state
+      {:ok, task} =
+        Forge.TaskEngine.create_task(session, %{
+          role: :human,
+          title: "Approve deployment",
+          prompt: "Please approve the deployment"
+        })
+
+      assert task.state == :planned
+
+      {:ok, view, html} = live(conn, ~p"/session/#{session.id}")
+
+      # Automation starts as :supervised (session default)
+      assert html =~ "supervised"
+
+      # Click cycle_automation: supervised → autopilot
+      html = render_click(view, "cycle_automation")
+      assert html =~ "autopilot"
+
+      # The human task should still be in :planned state — not auto-approved
+      reloaded_task = Forge.Repo.get!(Forge.Schemas.Task, task.id)
+      assert reloaded_task.state == :planned
+    end
+
+    test "automation label updates in UI through full cycle", %{conn: conn, session: session} do
+      {:ok, _view, html} = live(conn, ~p"/session/#{session.id}")
+      assert html =~ "supervised"
+
+      {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
+
+      # supervised → autopilot
+      html = render_click(view, "cycle_automation")
+      assert html =~ "autopilot"
+
+      # autopilot → manual
+      html = render_click(view, "cycle_automation")
+      assert html =~ "manual"
+
+      # manual → supervised
+      html = render_click(view, "cycle_automation")
+      assert html =~ "supervised"
+    end
+  end
+
   describe "session not found" do
     test "redirects to home when session ID doesn't exist", %{conn: conn} do
       fake_id = Ecto.UUID.generate()
