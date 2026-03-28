@@ -180,11 +180,12 @@ defmodule Forge.PromptBuilder do
   """
 
   @doc "Build a prompt for a given role and task."
-  def build(%Forge.Project{} = project, role, task_prompt \\ "") do
+  def build(%Forge.Project{} = project, role, task_prompt \\ "", opts \\ []) do
     base = base_instructions(role)
     project_role = load_project_role(project.path, role)
     skills_list = format_skills(project.skills)
     project_context = format_project_context(project.context, role)
+    image_context = format_image_context(Keyword.get(opts, :images, []))
 
     [
       "<role>\n#{base}\n</role>",
@@ -193,6 +194,7 @@ defmodule Forge.PromptBuilder do
       ),
       "<project-conventions>\n#{project.conventions}\n</project-conventions>",
       if(project_context, do: "<project-context>\n#{project_context}\n</project-context>"),
+      if(image_context, do: "<images>\n#{image_context}\n</images>"),
       if(skills_list != "", do: "<available-skills>\n#{skills_list}\n</available-skills>"),
       "<task>\n#{task_prompt}\n</task>"
     ]
@@ -253,4 +255,12 @@ defmodule Forge.PromptBuilder do
   end
 
   defp format_project_context(_, _), do: nil
+
+  defp format_image_context([]), do: nil
+  defp format_image_context(nil), do: nil
+
+  defp format_image_context(filenames) do
+    paths = Enum.map_join(filenames, "\n", fn f -> "- .forge/images/#{f}" end)
+    "Reference images have been provided. Use the Read tool to view them:\n#{paths}"
+  end
 end

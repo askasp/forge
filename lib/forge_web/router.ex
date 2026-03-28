@@ -17,6 +17,8 @@ defmodule ForgeWeb.Router do
   scope "/", ForgeWeb do
     pipe_through :browser
 
+    get "/images/:id", ImageController, :show
+
     live "/", HomeLive
     live "/project/:path", ProjectLive
     live "/session/:id", DashboardLive

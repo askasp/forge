@@ -17,6 +17,7 @@ defmodule Forge.Schemas.Session do
 
     belongs_to(:project, Forge.Schemas.Project)
     has_many(:tasks, Forge.Schemas.Task)
+    has_many(:images, Forge.Schemas.Image)
 
     timestamps(type: :utc_datetime)
   end
