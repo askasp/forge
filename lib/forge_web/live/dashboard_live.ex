@@ -49,7 +49,8 @@ defmodule ForgeWeb.DashboardLive do
         |> assign(:ask_port, nil)
         |> assign(:ask_streaming, false)
         |> assign(:ask_workdir, session.worktree_path)
-        |> assign(:sidebar_open, false)
+        |> assign(:project_path, session.project && session.project.repo_path)
+        |> assign(:sidebar_open, true)
         |> assign(:show_shortcuts, false)
 
       {:ok, socket}
@@ -429,24 +430,13 @@ defmodule ForgeWeb.DashboardLive do
             Keyboard Shortcuts
           </h3>
           <div class="space-y-2 font-mono text-xs">
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Continue</span><span class="text-base-content/30">Cmd+Enter</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Pause</span><span class="text-base-content/30">Esc</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Skip</span><span class="text-base-content/30">Cmd+.</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Ask panel</span><span class="text-base-content/30">Cmd+K</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Sessions</span><span class="text-base-content/30">Cmd+B</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-base-content/60">Shortcuts</span><span class="text-base-content/30">?</span>
-            </div>
+            <div class="flex justify-between"><span class="text-base-content/60">Continue</span><span class="text-base-content/30">Cmd+Enter</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">Pause</span><span class="text-base-content/30">Esc</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">Skip</span><span class="text-base-content/30">Cmd+.</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">Ask panel</span><span class="text-base-content/30">Cmd+K</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">Sessions</span><span class="text-base-content/30">Cmd+B</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">New session</span><span class="text-base-content/30">Cmd+N</span></div>
+            <div class="flex justify-between"><span class="text-base-content/60">Shortcuts</span><span class="text-base-content/30">?</span></div>
           </div>
         </div>
       </div>
@@ -460,15 +450,10 @@ defmodule ForgeWeb.DashboardLive do
             agent_started_at={@agent_started_at}
           />
           <div class="flex items-center gap-3 font-mono text-[10px] text-base-content/35">
-            <button phx-click="toggle_sidebar" class="hover:text-base-content/50 cursor-pointer">
-              Cmd+B
-            </button>
-            <button phx-click="toggle_ask" class="hover:text-base-content/50 cursor-pointer">
-              Cmd+K
-            </button>
-            <button phx-click="toggle_shortcuts" class="hover:text-base-content/50 cursor-pointer">
-              ?
-            </button>
+            <button phx-click="toggle_sidebar" class="hover:text-base-content/50 cursor-pointer">Cmd+B</button>
+            <button phx-click="new_session" class="hover:text-base-content/50 cursor-pointer">Cmd+N</button>
+            <button phx-click="toggle_ask" class="hover:text-base-content/50 cursor-pointer">Cmd+K</button>
+            <button phx-click="toggle_shortcuts" class="hover:text-base-content/50 cursor-pointer">?</button>
           </div>
         </div>
       </footer>
@@ -1066,6 +1051,15 @@ defmodule ForgeWeb.DashboardLive do
 
   def handle_event("toggle_sidebar", _params, socket) do
     {:noreply, assign(socket, :sidebar_open, !socket.assigns.sidebar_open)}
+  end
+
+  def handle_event("new_session", _params, socket) do
+    project_path = socket.assigns.project_path
+    if project_path do
+      {:noreply, push_navigate(socket, to: ~p"/?project=#{project_path}")}
+    else
+      {:noreply, push_navigate(socket, to: ~p"/")}
+    end
   end
 
   def handle_event("delete_session", %{"id" => session_id}, socket) do
