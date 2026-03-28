@@ -115,7 +115,7 @@ defmodule Forge.Scheduler do
 
   def handle_cast({:set_automation, level}, state) do
     Logger.info("[Scheduler] Automation changed to #{level}")
-    {:noreply, %{state | automation: level} |> maybe_dispatch()}
+    {:noreply, %{state | automation: level}}
   end
 
   @impl true
