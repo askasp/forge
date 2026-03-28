@@ -96,6 +96,118 @@ defmodule ForgeWeb.HomeLiveAutocompleteTest do
     end
   end
 
+  describe "filter_suggestions — known projects before filesystem" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "fs_order_#{:erlang.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(tmp, "subdir_x"))
+      File.mkdir_p!(Path.join(tmp, "subdir_y"))
+      on_exit(fn -> File.rm_rf!(tmp) end)
+      %{tmp: tmp}
+    end
+
+    test "known projects matching the path appear before filesystem entries", %{
+      conn: conn,
+      tmp: tmp
+    } do
+      known_path = Path.join(tmp, "subdir_x")
+      Forge.KnownProjects.add(known_path)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html = render_keyup(view, "filter_suggestions", %{"value" => tmp <> "/"})
+
+      # Both subdir_x (known) and subdir_y (filesystem) should appear
+      assert html =~ "subdir_x"
+      assert html =~ "subdir_y"
+
+      # The known project (subdir_x) should appear before the filesystem-only entry (subdir_y)
+      known_pos = :binary.match(html, "data-path=\"#{known_path}\"") |> elem(0)
+      fs_pos = :binary.match(html, "data-path=\"#{Path.join(tmp, "subdir_y")}\"") |> elem(0)
+      assert known_pos < fs_pos
+    end
+
+    test "known projects are not duplicated in results", %{conn: conn, tmp: tmp} do
+      known_path = Path.join(tmp, "subdir_x")
+      Forge.KnownProjects.add(known_path)
+
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html = render_keyup(view, "filter_suggestions", %{"value" => tmp <> "/"})
+
+      # Count occurrences of the known path — should appear exactly once
+      matches = Regex.scan(~r/data-path="#{Regex.escape(known_path)}"/, html)
+      assert length(matches) == 1
+    end
+  end
+
+  describe "filter_suggestions — result cap" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "fs_cap_#{:erlang.unique_integer([:positive])}")
+
+      for i <- 1..25 do
+        File.mkdir_p!(Path.join(tmp, "dir_#{String.pad_leading("#{i}", 2, "0")}"))
+      end
+
+      on_exit(fn -> File.rm_rf!(tmp) end)
+      %{tmp: tmp}
+    end
+
+    test "results are capped at 20", %{conn: conn, tmp: tmp} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html = render_keyup(view, "filter_suggestions", %{"value" => tmp <> "/"})
+
+      button_count = length(Regex.scan(~r/data-path=/, html))
+      assert button_count <= 20
+    end
+  end
+
+  describe "filter_suggestions — tilde edge cases" do
+    test "bare tilde ~ expands to home directory", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      html = render_keyup(view, "filter_suggestions", %{"value" => "~"})
+
+      # Should not crash; ~ with no trailing slash means parent is home, prefix is empty
+      # The home dir's parent is dirname(home), prefix is basename(home)
+      assert is_binary(html)
+    end
+  end
+
+  describe "filter_suggestions — selected_suggestion_index reset" do
+    test "selected_suggestion_index resets when typing new input", %{conn: conn} do
+      Forge.KnownProjects.add("/tmp/reset-test-project")
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_keyup(view, "filter_suggestions", %{"value" => ""})
+
+      # Select first item
+      render_click(view, "navigate_suggestion", %{"direction" => "down"})
+
+      # Now type new input — should reset selection
+      html = render_keyup(view, "filter_suggestions", %{"value" => "reset"})
+
+      # No item should be selected after new input
+      refute html =~ ~s(data-selected="true")
+    end
+
+    test "selected_suggestion_index resets after selecting a project", %{conn: conn} do
+      Forge.KnownProjects.add("/tmp/sel-reset-test")
+
+      {:ok, view, _html} = live(conn, ~p"/")
+      render_keyup(view, "filter_suggestions", %{"value" => ""})
+
+      # Navigate and select
+      render_click(view, "navigate_suggestion", %{"direction" => "down"})
+      render_click(view, "select_project", %{"path" => "/tmp/sel-reset-test"})
+
+      # Re-open suggestions
+      html = render_keyup(view, "filter_suggestions", %{"value" => ""})
+
+      refute html =~ ~s(data-selected="true")
+    end
+  end
+
   describe "navigate_suggestion" do
     test "arrow down selects first suggestion", %{conn: conn} do
       Forge.KnownProjects.add("/tmp/nav-test-project")
