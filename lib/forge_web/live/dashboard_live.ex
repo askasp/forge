@@ -906,9 +906,17 @@ defmodule ForgeWeb.DashboardLive do
     <div class="flex gap-1">
       <button phx-click="retry" class={@pri}>Retry</button>
       <button phx-click="skip" class={@sec}>Skip</button>
+      <button
+        phx-click="merge_into_main"
+        data-confirm="Merge into main despite errors?"
+        class={@sec}
+      >
+        Merge into Main
+      </button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      Error — see details above
+      <span :if={!@merge_error}>Error — see details above</span>
+      <span :if={@merge_error} class="text-error">{@merge_error}</span>
     </div>
     """
   end
@@ -918,9 +926,17 @@ defmodule ForgeWeb.DashboardLive do
     <div class="flex gap-1">
       <button phx-click="skip" class={@pri}>Skip</button>
       <button phx-click="continue" class={@sec}>Force Continue</button>
+      <button
+        phx-click="merge_into_main"
+        data-confirm="Merge into main despite loop limit?"
+        class={@sec}
+      >
+        Merge into Main
+      </button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      QA-dev loop limit reached
+      <span :if={!@merge_error}>QA-dev loop limit reached</span>
+      <span :if={@merge_error} class="text-error">{@merge_error}</span>
     </div>
     """
   end
