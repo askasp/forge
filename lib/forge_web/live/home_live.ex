@@ -31,6 +31,10 @@ defmodule ForgeWeb.HomeLive do
       |> assign(:branch_prefix, "wt-")
       |> assign(:base_branch, "main")
       |> assign(:selected_suggestion_index, nil)
+      |> assign(:mention_results, [])
+      |> assign(:mention_index, 0)
+      |> assign(:mention_query, nil)
+      |> assign(:project_files, [])
 
     if project_from_url && connected?(socket) do
       send(self(), {:do_scan, project_from_url})
@@ -143,12 +147,35 @@ defmodule ForgeWeb.HomeLive do
                 <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
                   Task
                 </label>
-                <textarea
-                  name="goal"
-                  rows="3"
-                  placeholder="What do you want done?"
-                  class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
-                >{@goal}</textarea>
+                <div id="goal-mention" phx-hook="MentionAutocomplete" class="relative">
+                  <textarea
+                    name="goal"
+                    rows="3"
+                    placeholder="What do you want done? Use @ to reference files"
+                    class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
+                  >{@goal}</textarea>
+
+                  <div
+                    :if={@mention_results != []}
+                    data-mention-results
+                    class="absolute left-0 right-0 border border-base-content/20 bg-base-100 z-20 max-h-48 overflow-y-auto"
+                    style="bottom: 100%; margin-bottom: 4px;"
+                  >
+                    <button
+                      :for={{path, idx} <- Enum.with_index(@mention_results)}
+                      type="button"
+                      phx-click="mention_select_path"
+                      phx-value-path={path}
+                      class={[
+                        "w-full text-left px-3 py-1.5 font-mono text-xs border-b border-base-content/5 last:border-0 transition-colors duration-75",
+                        idx == @mention_index && "bg-base-content text-base-100",
+                        idx != @mention_index && "hover:bg-base-content/10"
+                      ]}
+                    >
+                      <span class="text-base-content/40">{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <%!-- Automation level --%>
@@ -493,6 +520,7 @@ defmodule ForgeWeb.HomeLive do
           base_branch = get_in(config, ["git", "base_branch"]) || "main"
 
           KnownProjects.add(path)
+          project_files = Forge.FileTree.list(path)
 
           {:noreply,
            socket
@@ -507,7 +535,8 @@ defmodule ForgeWeb.HomeLive do
            |> assign(:test_command, test_cmd)
            |> assign(:dev_start, dev_start)
            |> assign(:branch_prefix, branch_prefix)
-           |> assign(:base_branch, base_branch)}
+           |> assign(:base_branch, base_branch)
+           |> assign(:project_files, project_files)}
 
         {:error, reason} ->
           {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
@@ -565,6 +594,7 @@ defmodule ForgeWeb.HomeLive do
 
   def handle_event("start_session", %{"goal" => goal}, socket) do
     goal = String.trim(goal)
+    socket = assign(socket, mention_results: [], mention_index: 0, mention_query: nil)
 
     cond do
       socket.assigns.project_path == "" ->
@@ -612,6 +642,55 @@ defmodule ForgeWeb.HomeLive do
     end
   end
 
+  def handle_event("mention_search", %{"query" => query}, socket) do
+    results =
+      Forge.FileTree.search(
+        socket.assigns.project_path,
+        query,
+        socket.assigns.project_files,
+        15
+      )
+
+    {:noreply, assign(socket, mention_results: results, mention_index: 0, mention_query: query)}
+  end
+
+  def handle_event("mention_clear", _params, socket) do
+    {:noreply, assign(socket, mention_results: [], mention_index: 0, mention_query: nil)}
+  end
+
+  def handle_event("mention_navigate", %{"direction" => dir}, socket) do
+    max = length(socket.assigns.mention_results) - 1
+    current = socket.assigns.mention_index
+
+    new_index =
+      case dir do
+        "down" -> min(current + 1, max)
+        "up" -> max(current - 1, 0)
+      end
+
+    {:noreply, assign(socket, :mention_index, new_index)}
+  end
+
+  def handle_event("mention_select", _params, socket) do
+    case Enum.at(socket.assigns.mention_results, socket.assigns.mention_index) do
+      nil ->
+        {:noreply, socket}
+
+      path ->
+        {:noreply,
+         socket
+         |> assign(mention_results: [], mention_index: 0, mention_query: nil)
+         |> push_event("mention_selected", %{text: path})}
+    end
+  end
+
+  def handle_event("mention_select_path", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> assign(mention_results: [], mention_index: 0, mention_query: nil)
+     |> push_event("mention_selected", %{text: path})}
+  end
+
   def handle_event("set_automation", %{"level" => level}, socket) do
     {:noreply, assign(socket, :automation, level)}
   end
@@ -631,6 +710,7 @@ defmodule ForgeWeb.HomeLive do
       {:ok, scan} ->
         config = scan.config
         KnownProjects.add(path)
+        project_files = Forge.FileTree.list(path)
 
         {:noreply,
          socket
@@ -648,7 +728,8 @@ defmodule ForgeWeb.HomeLive do
          |> assign(:test_command, get_in(config, ["commands", "test"]) || "")
          |> assign(:dev_start, get_in(config, ["commands", "dev_start"]) || "")
          |> assign(:branch_prefix, get_in(config, ["git", "branch_prefix"]) || "wt-")
-         |> assign(:base_branch, get_in(config, ["git", "base_branch"]) || "main")}
+         |> assign(:base_branch, get_in(config, ["git", "base_branch"]) || "main")
+         |> assign(:project_files, project_files)}
 
       {:error, reason} ->
         {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
