@@ -99,6 +99,15 @@ defmodule ForgeWeb.DashboardLiveTest do
       assert html =~ "Cmd+K"
     end
 
+    test "shortcuts overlay does not show Cmd+N", %{conn: conn, session: session} do
+      {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
+
+      html = render_click(view, "toggle_shortcuts")
+
+      # Cmd+N should NOT appear — replaced by Alt+N
+      refute html =~ "Cmd+N"
+    end
+
     test "toggle_shortcuts twice hides the overlay", %{conn: conn, session: session} do
       {:ok, view, _html} = live(conn, ~p"/session/#{session.id}")
 
@@ -116,6 +125,13 @@ defmodule ForgeWeb.DashboardLiveTest do
       # Footer should have the Alt+N button
       assert html =~ ~s(phx-click="new_session")
       assert html =~ "Alt+N"
+    end
+
+    test "footer does not show Cmd+N hint", %{conn: conn, session: session} do
+      {:ok, _view, html} = live(conn, ~p"/session/#{session.id}")
+
+      # Cmd+N should NOT appear in footer — replaced by Alt+N
+      refute html =~ "Cmd+N"
     end
 
     test "footer shows Cmd+B hint button", %{conn: conn, session: session} do

@@ -39,6 +39,15 @@ defmodule ForgeWeb.KeyboardShortcutsHookTest do
       assert src =~ "new_session"
     end
 
+    test "does not bind Cmd+N or Ctrl+N to new_session", %{kb_source: src} do
+      # Extract the new_session block and verify it doesn't use metaKey/ctrlKey
+      # The condition line for new_session should only contain altKey, not metaKey or ctrlKey
+      [_, condition] = Regex.run(~r/} else if \((.+?)\) \{\s*\n\s*e\.preventDefault\(\)\s*\n\s*this\.pushEvent\("new_session"/, src)
+      refute condition =~ "metaKey"
+      refute condition =~ "ctrlKey"
+      assert condition =~ "altKey"
+    end
+
     test "binds Cmd+K to toggle_ask", %{kb_source: src} do
       assert src =~ ~r/metaKey.*ctrlKey.*"k"/s
       assert src =~ "toggle_ask"
