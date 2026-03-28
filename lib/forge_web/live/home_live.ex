@@ -4,20 +4,22 @@ defmodule ForgeWeb.HomeLive do
   alias Forge.{Session, ProjectScanner, KnownProjects}
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     sessions = Session.list_sessions()
     projects = group_sessions_by_project(sessions)
     known = KnownProjects.list()
 
+    project_from_url = params["project"]
+
     socket =
       socket
-      |> assign(:project_path, "")
+      |> assign(:project_path, project_from_url || "")
       |> assign(:goal, "")
       |> assign(:scan, nil)
       |> assign(:sessions, sessions)
       |> assign(:projects, projects)
       |> assign(:known_projects, known)
-      |> assign(:suggestions, known)
+      |> assign(:suggestions, if(project_from_url, do: [], else: known))
       |> assign(:error, nil)
       |> assign(:config_saved, false)
       |> assign(:config_collapsed, true)
@@ -29,13 +31,17 @@ defmodule ForgeWeb.HomeLive do
       |> assign(:branch_prefix, "wt-")
       |> assign(:base_branch, "main")
 
+    if project_from_url && connected?(socket) do
+      send(self(), {:do_scan, project_from_url})
+    end
+
     {:ok, socket}
   end
 
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="min-h-screen bg-base-100 text-base-content">
+    <div class="min-h-screen bg-base-100 text-base-content" id="home" phx-hook="HomeShortcuts">
       <div class="border-t-[6px] border-base-content" />
 
       <div class="max-w-2xl mx-auto px-8 py-16">
