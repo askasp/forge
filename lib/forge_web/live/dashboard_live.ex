@@ -485,6 +485,9 @@ defmodule ForgeWeb.DashboardLive do
               <span class="text-base-content/60">New session</span><span class="text-base-content/30">Cmd+N</span>
             </div>
             <div class="flex justify-between">
+              <span class="text-base-content/60">Kill session</span><span class="text-base-content/30">Cmd+Del</span>
+            </div>
+            <div class="flex justify-between">
               <span class="text-base-content/60">Shortcuts</span><span class="text-base-content/30">?</span>
             </div>
           </div>
@@ -500,6 +503,14 @@ defmodule ForgeWeb.DashboardLive do
             agent_started_at={@agent_started_at}
           />
           <div class="flex items-center gap-3 font-mono text-[10px] text-base-content/35">
+            <button
+              phx-click="kill_session"
+              data-confirm="Kill this session and delete its worktree?"
+              class="hover:text-base-content cursor-pointer"
+            >
+              Kill
+            </button>
+            <span class="text-base-content/15">|</span>
             <button phx-click="toggle_sidebar" class="hover:text-base-content/50 cursor-pointer">
               Cmd+B
             </button>
@@ -967,6 +978,11 @@ defmodule ForgeWeb.DashboardLive do
 
   def handle_event("stop_session", _params, socket) do
     Forge.Session.stop_session(socket.assigns.session_id)
+    {:noreply, push_navigate(socket, to: ~p"/")}
+  end
+
+  def handle_event("kill_session", _params, socket) do
+    Forge.Session.delete_session(socket.assigns.session_id)
     {:noreply, push_navigate(socket, to: ~p"/")}
   end
 
