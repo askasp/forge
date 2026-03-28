@@ -228,38 +228,46 @@ defmodule Forge.Session do
       project = Forge.Project.load(project_path)
       base = project.base_branch
 
-      # Terminate session processes first so worktree isn't in use
-      terminate_session_processes(session_id)
-
-      # Remove worktree (must happen before merge since git won't allow
-      # deleting a branch that has a worktree attached)
-      System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
-        cd: project_path,
-        stderr_to_stdout: true
-      )
-
       # Ensure we're on the base branch before merging
-      System.cmd("git", ["checkout", base], cd: project_path, stderr_to_stdout: true)
-
-      # Merge branch into base
-      case System.cmd("git", ["merge", branch, "--no-ff", "-m", "Merge #{branch}"],
-             cd: project_path,
-             stderr_to_stdout: true
-           ) do
+      case System.cmd("git", ["checkout", base], cd: project_path, stderr_to_stdout: true) do
         {_, 0} ->
-          # Delete the branch
-          System.cmd("git", ["branch", "-D", branch],
-            cd: project_path,
-            stderr_to_stdout: true
-          )
-
-          # Mark session complete
-          session |> Session.changeset(%{state: :complete}) |> Repo.update()
-          Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
           :ok
 
         {output, _} ->
-          {:error, "merge failed: #{String.trim(output)}"}
+          {:error, "checkout #{base} failed: #{String.trim(output)}"}
+      end
+      |> case do
+        :ok ->
+          # Merge branch into base
+          case System.cmd("git", ["merge", branch, "--no-ff", "-m", "Merge #{branch}"],
+                 cd: project_path,
+                 stderr_to_stdout: true
+               ) do
+            {_, 0} ->
+              # Merge succeeded — clean up worktree, branch, and session
+              terminate_session_processes(session_id)
+
+              System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
+                cd: project_path,
+                stderr_to_stdout: true
+              )
+
+              System.cmd("git", ["branch", "-D", branch],
+                cd: project_path,
+                stderr_to_stdout: true
+              )
+
+              session |> Session.changeset(%{state: :complete}) |> Repo.update()
+              Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
+              :ok
+
+            {output, _} ->
+              System.cmd("git", ["merge", "--abort"], cd: project_path, stderr_to_stdout: true)
+              {:error, "merge failed: #{String.trim(output)}"}
+          end
+
+        error ->
+          error
       end
     else
       {:error, "session or worktree not found"}
@@ -292,7 +300,7 @@ defmodule Forge.Session do
         end
       end
 
-      session |> Session.changeset(%{state: :complete}) |> Repo.update()
+      Repo.delete(session)
       Logger.info("[Session] Deleted session #{session_id}")
     end
 

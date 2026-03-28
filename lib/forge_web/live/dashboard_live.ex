@@ -52,6 +52,7 @@ defmodule ForgeWeb.DashboardLive do
         |> assign(:project_path, session.project && session.project.repo_path)
         |> assign(:sidebar_open, true)
         |> assign(:show_shortcuts, false)
+        |> assign(:merge_error, nil)
 
       {:ok, socket}
     else
@@ -501,6 +502,7 @@ defmodule ForgeWeb.DashboardLive do
             state={@orchestrator_state}
             agent_role={@agent_role}
             agent_started_at={@agent_started_at}
+            merge_error={@merge_error}
           />
           <div class="flex items-center gap-3 font-mono text-[10px] text-base-content/35">
             <button
@@ -947,7 +949,10 @@ defmodule ForgeWeb.DashboardLive do
       </button>
       <a href={~p"/"} class={@sec}>New Session</a>
     </div>
-    <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">Complete</div>
+    <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
+      <span :if={!@merge_error}>Complete</span>
+      <span :if={@merge_error} class="text-error">{@merge_error}</span>
+    </div>
     """
   end
 
