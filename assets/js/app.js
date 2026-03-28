@@ -29,12 +29,14 @@ import {ThemeToggle} from "./hooks/theme_toggle"
 import {KeyboardShortcuts} from "./hooks/keyboard_shortcuts"
 import {HomeShortcuts} from "./hooks/home_shortcuts"
 import {Notifications} from "./hooks/notifications"
+import {ProjectPathAutocomplete} from "./hooks/project_path_autocomplete"
+import {MentionAutocomplete} from "./hooks/mention_autocomplete"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications},
+  hooks: {...colocatedHooks, AutoScroll, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications, ProjectPathAutocomplete, MentionAutocomplete},
 })
 
 // Show progress bar on live navigation and form submits

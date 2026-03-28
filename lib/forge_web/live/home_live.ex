@@ -30,6 +30,11 @@ defmodule ForgeWeb.HomeLive do
       |> assign(:dev_start, "")
       |> assign(:branch_prefix, "wt-")
       |> assign(:base_branch, "main")
+      |> assign(:selected_suggestion_index, nil)
+      |> assign(:mention_results, [])
+      |> assign(:mention_index, 0)
+      |> assign(:mention_query, nil)
+      |> assign(:project_files, [])
 
     if project_from_url && connected?(socket) do
       send(self(), {:do_scan, project_from_url})
@@ -67,7 +72,7 @@ defmodule ForgeWeb.HomeLive do
             Project Path
           </label>
           <form phx-submit="scan_project" class="flex gap-3">
-            <div class="flex-1 relative">
+            <div class="flex-1 relative" id="project-path-autocomplete" phx-hook="ProjectPathAutocomplete">
               <input
                 type="text"
                 name="project_path"
@@ -84,16 +89,23 @@ defmodule ForgeWeb.HomeLive do
                   (@suggestions != [] && @project_path == "") ||
                     (@suggestions != [] && @project_path != "" && !@scan)
                 }
+                data-suggestions
                 class="absolute top-full left-0 right-0 border border-base-content/20 bg-base-100 z-10 max-h-48 overflow-y-auto"
               >
                 <button
-                  :for={path <- @suggestions}
+                  :for={{path, idx} <- Enum.with_index(@suggestions)}
                   type="button"
                   phx-click="select_project"
                   phx-value-path={path}
-                  class="w-full text-left px-3 py-2 font-mono text-xs hover:bg-base-content hover:text-base-100 transition-colors duration-100 border-b border-base-content/5 last:border-0"
+                  data-path={path}
+                  data-selected={to_string(@selected_suggestion_index == idx)}
+                  class={[
+                    "w-full text-left px-3 py-2 font-mono text-xs transition-colors duration-100 border-b border-base-content/5 last:border-0",
+                    @selected_suggestion_index == idx && "bg-base-content text-base-100",
+                    @selected_suggestion_index != idx && "hover:bg-base-content hover:text-base-100"
+                  ]}
                 >
-                  <span class="text-base-content/40">{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
+                  <span class={[@selected_suggestion_index != idx && "text-base-content/40"]}>{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
                 </button>
               </div>
             </div>
@@ -135,12 +147,35 @@ defmodule ForgeWeb.HomeLive do
                 <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
                   Task
                 </label>
-                <textarea
-                  name="goal"
-                  rows="3"
-                  placeholder="What do you want done?"
-                  class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
-                >{@goal}</textarea>
+                <div id="goal-mention" phx-hook="MentionAutocomplete" class="relative">
+                  <textarea
+                    name="goal"
+                    rows="3"
+                    placeholder="What do you want done? Use @ to reference files"
+                    class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
+                  >{@goal}</textarea>
+
+                  <div
+                    :if={@mention_results != []}
+                    data-mention-results
+                    class="absolute left-0 right-0 border border-base-content/20 bg-base-100 z-20 max-h-48 overflow-y-auto"
+                    style="bottom: 100%; margin-bottom: 4px;"
+                  >
+                    <button
+                      :for={{path, idx} <- Enum.with_index(@mention_results)}
+                      type="button"
+                      phx-click="mention_select_path"
+                      phx-value-path={path}
+                      class={[
+                        "w-full text-left px-3 py-1.5 font-mono text-xs border-b border-base-content/5 last:border-0 transition-colors duration-75",
+                        idx == @mention_index && "bg-base-content text-base-100",
+                        idx != @mention_index && "hover:bg-base-content/10"
+                      ]}
+                    >
+                      <span class="text-base-content/40">{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <%!-- Automation level --%>
@@ -427,16 +462,45 @@ defmodule ForgeWeb.HomeLive do
       if query == "" do
         socket.assigns.known_projects
       else
-        socket.assigns.known_projects
-        |> Enum.filter(&String.contains?(String.downcase(&1), String.downcase(query)))
+        if String.starts_with?(query, "/") or String.starts_with?(query, "~") do
+          browse_filesystem(query, socket.assigns.known_projects)
+        else
+          socket.assigns.known_projects
+          |> Enum.filter(&String.contains?(String.downcase(&1), String.downcase(query)))
+        end
       end
 
-    {:noreply, assign(socket, suggestions: suggestions, project_path: query)}
+    {:noreply,
+     assign(socket, suggestions: suggestions, project_path: query, selected_suggestion_index: nil)}
   end
 
   def handle_event("select_project", %{"path" => path}, socket) do
     send(self(), {:do_scan, path})
-    {:noreply, assign(socket, project_path: path, suggestions: [])}
+    {:noreply, assign(socket, project_path: path, suggestions: [], selected_suggestion_index: nil)}
+  end
+
+  def handle_event("navigate_suggestion", %{"direction" => direction}, socket) do
+    count = length(socket.assigns.suggestions)
+
+    if count == 0 do
+      {:noreply, socket}
+    else
+      current = socket.assigns.selected_suggestion_index
+
+      index =
+        case {direction, current} do
+          {"down", nil} -> 0
+          {"down", i} -> rem(i + 1, count)
+          {"up", nil} -> count - 1
+          {"up", i} -> rem(i - 1 + count, count)
+        end
+
+      {:noreply, assign(socket, :selected_suggestion_index, index)}
+    end
+  end
+
+  def handle_event("clear_suggestions", _params, socket) do
+    {:noreply, assign(socket, suggestions: [], selected_suggestion_index: nil)}
   end
 
   def handle_event("scan_project", params, socket) do
@@ -456,6 +520,7 @@ defmodule ForgeWeb.HomeLive do
           base_branch = get_in(config, ["git", "base_branch"]) || "main"
 
           KnownProjects.add(path)
+          project_files = Forge.FileTree.list(path)
 
           {:noreply,
            socket
@@ -470,7 +535,8 @@ defmodule ForgeWeb.HomeLive do
            |> assign(:test_command, test_cmd)
            |> assign(:dev_start, dev_start)
            |> assign(:branch_prefix, branch_prefix)
-           |> assign(:base_branch, base_branch)}
+           |> assign(:base_branch, base_branch)
+           |> assign(:project_files, project_files)}
 
         {:error, reason} ->
           {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
@@ -528,6 +594,7 @@ defmodule ForgeWeb.HomeLive do
 
   def handle_event("start_session", %{"goal" => goal}, socket) do
     goal = String.trim(goal)
+    socket = assign(socket, mention_results: [], mention_index: 0, mention_query: nil)
 
     cond do
       socket.assigns.project_path == "" ->
@@ -575,6 +642,55 @@ defmodule ForgeWeb.HomeLive do
     end
   end
 
+  def handle_event("mention_search", %{"query" => query}, socket) do
+    results =
+      Forge.FileTree.search(
+        socket.assigns.project_path,
+        query,
+        socket.assigns.project_files,
+        15
+      )
+
+    {:noreply, assign(socket, mention_results: results, mention_index: 0, mention_query: query)}
+  end
+
+  def handle_event("mention_clear", _params, socket) do
+    {:noreply, assign(socket, mention_results: [], mention_index: 0, mention_query: nil)}
+  end
+
+  def handle_event("mention_navigate", %{"direction" => dir}, socket) do
+    max = length(socket.assigns.mention_results) - 1
+    current = socket.assigns.mention_index
+
+    new_index =
+      case dir do
+        "down" -> min(current + 1, max)
+        "up" -> max(current - 1, 0)
+      end
+
+    {:noreply, assign(socket, :mention_index, new_index)}
+  end
+
+  def handle_event("mention_select", _params, socket) do
+    case Enum.at(socket.assigns.mention_results, socket.assigns.mention_index) do
+      nil ->
+        {:noreply, socket}
+
+      path ->
+        {:noreply,
+         socket
+         |> assign(mention_results: [], mention_index: 0, mention_query: nil)
+         |> push_event("mention_selected", %{text: path})}
+    end
+  end
+
+  def handle_event("mention_select_path", %{"path" => path}, socket) do
+    {:noreply,
+     socket
+     |> assign(mention_results: [], mention_index: 0, mention_query: nil)
+     |> push_event("mention_selected", %{text: path})}
+  end
+
   def handle_event("set_automation", %{"level" => level}, socket) do
     {:noreply, assign(socket, :automation, level)}
   end
@@ -594,6 +710,7 @@ defmodule ForgeWeb.HomeLive do
       {:ok, scan} ->
         config = scan.config
         KnownProjects.add(path)
+        project_files = Forge.FileTree.list(path)
 
         {:noreply,
          socket
@@ -611,7 +728,8 @@ defmodule ForgeWeb.HomeLive do
          |> assign(:test_command, get_in(config, ["commands", "test"]) || "")
          |> assign(:dev_start, get_in(config, ["commands", "dev_start"]) || "")
          |> assign(:branch_prefix, get_in(config, ["git", "branch_prefix"]) || "wt-")
-         |> assign(:base_branch, get_in(config, ["git", "base_branch"]) || "main")}
+         |> assign(:base_branch, get_in(config, ["git", "base_branch"]) || "main")
+         |> assign(:project_files, project_files)}
 
       {:error, reason} ->
         {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
@@ -625,6 +743,53 @@ defmodule ForgeWeb.HomeLive do
     |> Enum.filter(fn s -> s.repo_path end)
     |> Enum.group_by(fn s -> s.repo_path end)
     |> Enum.sort_by(fn {path, _} -> path end)
+  end
+
+  defp browse_filesystem(query, known_projects) do
+    expanded = expand_home(query)
+
+    {parent, prefix} =
+      if String.ends_with?(expanded, "/") do
+        {expanded, ""}
+      else
+        {Path.dirname(expanded), Path.basename(expanded)}
+      end
+
+    matching_known =
+      known_projects
+      |> Enum.filter(&String.contains?(String.downcase(&1), String.downcase(query)))
+
+    fs_entries =
+      case File.ls(parent) do
+        {:ok, entries} ->
+          entries
+          |> Enum.filter(fn entry ->
+            full = Path.join(parent, entry)
+
+            File.dir?(full) &&
+              !String.starts_with?(entry, ".") &&
+              (prefix == "" || String.starts_with?(String.downcase(entry), String.downcase(prefix)))
+          end)
+          |> Enum.sort()
+          |> Enum.map(&Path.join(parent, &1))
+
+        {:error, _} ->
+          []
+      end
+
+    known_set = MapSet.new(matching_known)
+    unique_fs = Enum.reject(fs_entries, &MapSet.member?(known_set, &1))
+
+    (matching_known ++ unique_fs)
+    |> Enum.take(20)
+  end
+
+  defp expand_home(path) do
+    case path do
+      "~" -> System.user_home!()
+      "~/" <> rest -> Path.join(System.user_home!(), rest)
+      other -> other
+    end
   end
 
   defp session_dot(s) do
