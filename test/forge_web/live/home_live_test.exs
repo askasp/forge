@@ -94,7 +94,8 @@ defmodule ForgeWeb.HomeLiveTest do
       render(view)
 
       # Should attempt to start (auto-saves config), but worktree creation fails on test repo
-      html = render_submit(view, "start_session", %{"goal" => "Build a feature"})
+      render_submit(view, "start_session", %{"goal" => "Build a feature"})
+      html = render_async(view)
       assert html =~ "Failed:"
 
       cleanup_test_project(project_path)
