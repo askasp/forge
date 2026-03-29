@@ -235,62 +235,82 @@ defmodule Forge.Session do
       project = Forge.Project.load(project_path)
       base = project.base_branch
 
-      # Ensure we're on the base branch before merging
-      case System.cmd("git", ["checkout", base], cd: project_path, stderr_to_stdout: true) do
-        {_, 0} ->
-          :ok
+      # Dry-run: check for conflicts without touching the working tree
+      {tree_output, tree_exit} =
+        System.cmd("git", ["merge-tree", "--write-tree", base, branch],
+          cd: project_path,
+          stderr_to_stdout: true
+        )
 
-        {output, _} ->
-          {:error, "checkout #{base} failed: #{String.trim(output)}"}
-      end
-      |> case do
-        :ok ->
-          # Merge branch into base
-          case System.cmd("git", ["merge", branch, "--no-ff", "-m", "Merge #{branch}"],
-                 cd: project_path,
-                 stderr_to_stdout: true
-               ) do
-            {_, 0} ->
-              # Merge succeeded — clean up in safe order:
-              # 1. Delete data (before killing processes to avoid stale PubSub)
-              # 2. Update session state
-              # 3. Terminate processes last
-              task_ids =
-                from(t in Forge.Schemas.Task,
-                  where: t.session_id == ^session_id,
-                  select: t.id
+      if tree_exit != 0 do
+        {:error, "merge would conflict:\n#{String.trim(tree_output)}"}
+      else
+        # Stash any uncommitted changes so checkout/merge don't fail
+        {_, stash_exit} =
+          System.cmd("git", ["stash", "--include-untracked"],
+            cd: project_path,
+            stderr_to_stdout: true
+          )
+
+        stashed = stash_exit == 0
+
+        # Ensure we're on the base branch before merging
+        case System.cmd("git", ["checkout", base], cd: project_path, stderr_to_stdout: true) do
+          {_, 0} ->
+            :ok
+
+          {output, _} ->
+            {:error, "checkout #{base} failed: #{String.trim(output)}"}
+        end
+        |> case do
+          :ok ->
+            case System.cmd("git", ["merge", branch, "--no-ff", "-m", "Merge #{branch}"],
+                   cd: project_path,
+                   stderr_to_stdout: true
+                 ) do
+              {_, 0} ->
+                # Merge succeeded — clean up
+                task_ids =
+                  from(t in Forge.Schemas.Task,
+                    where: t.session_id == ^session_id,
+                    select: t.id
+                  )
+
+                from(r in Forge.Schemas.AgentRun, where: r.task_id in subquery(task_ids))
+                |> Repo.delete_all()
+
+                from(t in Forge.Schemas.Task, where: t.session_id == ^session_id)
+                |> Repo.delete_all()
+
+                session |> Session.changeset(%{state: :complete}) |> Repo.update()
+
+                terminate_session_processes(session_id)
+
+                System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
+                  cd: project_path,
+                  stderr_to_stdout: true
                 )
 
-              from(r in Forge.Schemas.AgentRun, where: r.task_id in subquery(task_ids))
-              |> Repo.delete_all()
+                System.cmd("git", ["branch", "-D", branch],
+                  cd: project_path,
+                  stderr_to_stdout: true
+                )
 
-              from(t in Forge.Schemas.Task, where: t.session_id == ^session_id)
-              |> Repo.delete_all()
+                if stashed, do: System.cmd("git", ["stash", "pop"], cd: project_path, stderr_to_stdout: true)
 
-              session |> Session.changeset(%{state: :complete}) |> Repo.update()
+                Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
+                :ok
 
-              terminate_session_processes(session_id)
+              {output, _} ->
+                System.cmd("git", ["merge", "--abort"], cd: project_path, stderr_to_stdout: true)
+                if stashed, do: System.cmd("git", ["stash", "pop"], cd: project_path, stderr_to_stdout: true)
+                {:error, "merge failed: #{String.trim(output)}"}
+            end
 
-              System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
-                cd: project_path,
-                stderr_to_stdout: true
-              )
-
-              System.cmd("git", ["branch", "-D", branch],
-                cd: project_path,
-                stderr_to_stdout: true
-              )
-
-              Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
-              :ok
-
-            {output, _} ->
-              System.cmd("git", ["merge", "--abort"], cd: project_path, stderr_to_stdout: true)
-              {:error, "merge failed: #{String.trim(output)}"}
-          end
-
-        error ->
-          error
+          error ->
+            if stashed, do: System.cmd("git", ["stash", "pop"], cd: project_path, stderr_to_stdout: true)
+            error
+        end
       end
     else
       {:error, "session or worktree not found"}

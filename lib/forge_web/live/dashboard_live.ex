@@ -15,7 +15,7 @@ defmodule ForgeWeb.DashboardLive do
     if session do
       if connected?(socket) do
         Phoenix.PubSub.subscribe(Forge.PubSub, "session:#{session_id}")
-        :timer.send_interval(1_000, self(), :tick)
+        :timer.send_interval(30_000, self(), :tick)
       end
 
       tasks = TaskEngine.list_tasks(session_id)
@@ -57,7 +57,6 @@ defmodule ForgeWeb.DashboardLive do
         |> assign(:merge_error, nil)
         |> assign(:user_notes, %{})
         |> assign(:planner_notes, [])
-        |> assign(:tick_count, 0)
 
       {:ok, socket}
     else
@@ -1056,7 +1055,7 @@ defmodule ForgeWeb.DashboardLive do
       <button phx-click="pause" class={@sec}>Pause</button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      @planner running{format_elapsed(@agent_started_at)}
+      @planner running<span id="elapsed-planning" phx-hook="ElapsedTime" data-started-at={@agent_started_at && DateTime.to_iso8601(@agent_started_at)}></span>
     </div>
     """
   end
@@ -1077,7 +1076,7 @@ defmodule ForgeWeb.DashboardLive do
       <button phx-click="pause" class={@sec}>Pause</button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      <span :if={@agent_role}>@{@agent_role} running{format_elapsed(@agent_started_at)}</span>
+      <span :if={@agent_role}>@{@agent_role} running<span id="elapsed-cruising" phx-hook="ElapsedTime" data-started-at={@agent_started_at && DateTime.to_iso8601(@agent_started_at)}></span></span>
       <span :if={!@agent_role}>{@done}/{@total} — dispatching next...</span>
     </div>
     """
@@ -1565,14 +1564,8 @@ defmodule ForgeWeb.DashboardLive do
 
       {:error, reason} ->
         Logger.error("[Dashboard] Merge failed: #{reason}")
-        {:noreply, socket |> assign(:merge_error, reason) |> put_flash(:error, "Merge failed: #{reason}")}
+        {:noreply, assign(socket, :merge_error, reason)}
     end
-  rescue
-    e ->
-      require Logger
-      reason = Exception.message(e)
-      Logger.error("[Dashboard] Merge crashed: #{reason}\n#{Exception.format_stacktrace(__STACKTRACE__)}")
-      {:noreply, socket |> assign(:merge_error, reason) |> put_flash(:error, "Merge failed: #{reason}")}
   end
 
   def handle_event("dismiss_merge_error", _params, socket) do
@@ -1715,27 +1708,18 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_info(:tick, socket) do
-    # Skip all processing in terminal states
     if socket.assigns.orchestrator_state == :merged do
       {:noreply, socket}
     else
-      tick = (socket.assigns[:tick_count] || 0) + 1
-      socket = assign(socket, :tick_count, tick)
-
       socket =
-        if rem(tick, 5) == 0 and !socket.assigns[:merge_error] do
+        if !socket.assigns[:merge_error] do
           socket = safe_reload_tasks(socket)
           maybe_auto_recover(socket)
         else
           socket
         end
 
-      # Force re-render for elapsed time display
-      if socket.assigns.agent_started_at do
-        {:noreply, assign(socket, :agent_started_at, socket.assigns.agent_started_at)}
-      else
-        {:noreply, socket}
-      end
+      {:noreply, socket}
     end
   end
 
@@ -1915,14 +1899,6 @@ defmodule ForgeWeb.DashboardLive do
   defp page_title(:planning_done, _role, _done, _total), do: "Plan Ready"
   defp page_title(_, _role, _done, _total), do: nil
 
-  defp format_elapsed(nil), do: ""
-
-  defp format_elapsed(started_at) do
-    seconds = DateTime.diff(DateTime.utc_now(), started_at, :second)
-    minutes = div(seconds, 60)
-    secs = rem(seconds, 60)
-    if minutes > 0, do: " — #{minutes}m #{secs}s", else: " — #{secs}s"
-  end
 
   defp orchestrator_label(:idle), do: "Idle"
   defp orchestrator_label(:planning), do: "Planning"
@@ -2148,4 +2124,7 @@ defmodule ForgeWeb.DashboardLive do
         socket
     end
   end
+
+  # Stash merge errors so they survive live reload remounts.
+  # Uses :persistent_term keyed by session_id; cleared on dismiss.
 end

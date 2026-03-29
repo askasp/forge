@@ -25,6 +25,7 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/forge"
 import topbar from "../vendor/topbar"
 import {AutoScroll} from "./hooks/auto_scroll"
+import {ElapsedTime} from "./hooks/elapsed_time"
 import {ThemeToggle} from "./hooks/theme_toggle"
 import {KeyboardShortcuts} from "./hooks/keyboard_shortcuts"
 import {HomeShortcuts} from "./hooks/home_shortcuts"
@@ -37,7 +38,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications, ProjectPathAutocomplete, MentionAutocomplete, MermaidRenderer},
+  hooks: {...colocatedHooks, AutoScroll, ElapsedTime, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications, ProjectPathAutocomplete, MentionAutocomplete, MermaidRenderer},
 })
 
 // Show progress bar on live navigation and form submits
