@@ -15,6 +15,8 @@ defmodule Forge.Schemas.Session do
       default: :supervised
     )
 
+    field(:plan_markdown, :string)
+
     belongs_to(:project, Forge.Schemas.Project)
     has_many(:tasks, Forge.Schemas.Task)
     has_many(:images, Forge.Schemas.Image)
@@ -24,7 +26,7 @@ defmodule Forge.Schemas.Session do
 
   def changeset(session, attrs) do
     session
-    |> cast(attrs, [:project_id, :worktree_path, :goal, :state, :automation])
+    |> cast(attrs, [:project_id, :worktree_path, :goal, :state, :automation, :plan_markdown])
     |> validate_required([:project_id, :goal])
     |> foreign_key_constraint(:project_id)
   end

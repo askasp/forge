@@ -31,12 +31,13 @@ import {HomeShortcuts} from "./hooks/home_shortcuts"
 import {Notifications} from "./hooks/notifications"
 import {ProjectPathAutocomplete} from "./hooks/project_path_autocomplete"
 import {MentionAutocomplete} from "./hooks/mention_autocomplete"
+import MermaidRenderer from "./hooks/mermaid_renderer"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, AutoScroll, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications, ProjectPathAutocomplete, MentionAutocomplete},
+  hooks: {...colocatedHooks, AutoScroll, ThemeToggle, KeyboardShortcuts, HomeShortcuts, Notifications, ProjectPathAutocomplete, MentionAutocomplete, MermaidRenderer},
 })
 
 // Show progress bar on live navigation and form submits

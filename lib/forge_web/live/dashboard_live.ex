@@ -50,9 +50,14 @@ defmodule ForgeWeb.DashboardLive do
         |> assign(:ask_streaming, false)
         |> assign(:ask_workdir, session.worktree_path)
         |> assign(:project_path, session.project && session.project.repo_path)
+        |> assign(:plan_markdown, session.plan_markdown)
+        |> assign(:plan_html, Forge.PlanRenderer.render(session.plan_markdown))
         |> assign(:sidebar_open, true)
         |> assign(:show_shortcuts, false)
         |> assign(:merge_error, nil)
+        |> assign(:user_notes, %{})
+        |> assign(:planner_notes, [])
+        |> assign(:tick_count, 0)
 
       {:ok, socket}
     else
@@ -148,6 +153,12 @@ defmodule ForgeWeb.DashboardLive do
                   >
                     input
                   </span>
+                  <span
+                    :if={s.done == s.total && s.total > 0 && s.id != @session_id}
+                    class="font-mono text-[8px] tracking-wider uppercase text-base-content/50 flex-shrink-0"
+                  >
+                    merge
+                  </span>
                 </a>
                 <button
                   :if={s.id != @session_id}
@@ -226,7 +237,8 @@ defmodule ForgeWeb.DashboardLive do
             <div
               :if={
                 @orchestrator_state in [:planning, :planning_done] ||
-                  (@steps == [] && @agent_output != [])
+                  (@steps == [] && @agent_output != []) ||
+                  @plan_html
               }
               class="mb-6"
             >
@@ -251,7 +263,7 @@ defmodule ForgeWeb.DashboardLive do
                     @planner
                   </span>
                   <span class="text-sm">
-                    {if @orchestrator_state == :planning, do: "Planning...", else: "Plan created"}
+                    {if @orchestrator_state == :planning, do: "Planning...", else: "Plan"}
                   </span>
                   <span
                     :if={@orchestrator_state == :planning && @agent_output != []}
@@ -259,8 +271,29 @@ defmodule ForgeWeb.DashboardLive do
                   >
                     {length(@agent_output)} events
                   </span>
+                  <div :if={@orchestrator_state == :planning} class="ml-auto flex items-center gap-2">
+                    <button
+                      phx-click="kill_task"
+                      phx-value-id={@running_task_id}
+                      data-confirm="Kill the planner?"
+                      class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
+                      title="Kill planner"
+                    >
+                      &#x25A0;
+                    </button>
+                    <button
+                      phx-click="restart_task"
+                      phx-value-id={@running_task_id}
+                      data-confirm="Restart the planner?"
+                      class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
+                      title="Restart planner"
+                    >
+                      &#x21bb;
+                    </button>
+                  </div>
                 </div>
                 <div class="px-4 py-3">
+                  <%!-- Live agent output while planning --%>
                   <div
                     :if={@agent_output != [] && @orchestrator_state == :planning}
                     class="font-mono text-xs leading-relaxed max-h-64 overflow-y-auto p-3 bg-base-200/60"
@@ -280,17 +313,81 @@ defmodule ForgeWeb.DashboardLive do
                   >
                     Starting...
                   </div>
-                  <div :if={@orchestrator_state != :planning && @steps != []} class="space-y-3">
-                    <div class="text-xs text-base-content/50">
-                      {length(Enum.filter(@steps, &(&1.role != :planner)))} steps created. Edit below or discuss with the planner.
+
+                  <%!-- User notes sent to planner --%>
+                  <div :if={@orchestrator_state == :planning && @planner_notes != []} class="space-y-1 pt-2">
+                    <div
+                      :for={note <- @planner_notes}
+                      class="font-mono text-xs text-base-content/50 pl-3 border-l-2 border-base-content/15"
+                    >
+                      <span class="text-base-content/30">you:</span> {note}
                     </div>
-                    <div class="flex gap-2 pt-1">
-                      <button
-                        phx-click="continue"
-                        class="font-mono text-[10px] tracking-widest uppercase bg-base-content text-base-100 px-4 py-1.5 border border-base-content hover:bg-transparent hover:text-base-content transition-colors duration-100"
+                  </div>
+
+                  <%!-- Chat input while planner is running --%>
+                  <form :if={@orchestrator_state == :planning} phx-submit="send_note" class="flex gap-2 pt-2">
+                    <input type="hidden" name="task_id" value={@running_task_id} />
+                    <input
+                      type="text"
+                      name="message"
+                      placeholder="Add context..."
+                      class="flex-1 bg-transparent border border-base-content/15 px-2 py-1 font-mono text-xs focus:outline-none focus:border-base-content/40 placeholder:text-base-content/20"
+                      autocomplete="off"
+                    />
+                    <button
+                      type="submit"
+                      class="font-mono text-[9px] tracking-wider uppercase border border-base-content/20 px-2 py-1 hover:bg-base-content hover:text-base-100 transition-colors"
+                    >
+                      Send
+                    </button>
+                  </form>
+
+                  <%!-- Plan narrative --%>
+                  <div :if={@orchestrator_state != :planning && @plan_html} class="space-y-4">
+                    <details open={@orchestrator_state == :planning_done} class="group">
+                      <summary class="cursor-pointer font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 hover:text-base-content">
+                        {if @orchestrator_state == :planning_done, do: "Plan", else: "View plan"}
+                      </summary>
+                      <div
+                        class="mt-2 plan-content max-h-[32rem] overflow-y-auto"
+                        id="plan-narrative"
+                        phx-hook="MermaidRenderer"
                       >
-                        Start
-                      </button>
+                        {Phoenix.HTML.raw(@plan_html)}
+                      </div>
+                    </details>
+
+                    <%!-- Edit controls only during planning_done --%>
+                    <div :if={@orchestrator_state == :planning_done} class="border-t border-base-content/10 pt-3 space-y-3">
+                      <div class="text-xs text-base-content/50">
+                        {length(Enum.filter(@steps, &(&1.role != :planner)))} steps created. Edit below or refine the plan.
+                      </div>
+
+                      <%!-- Planner chat input --%>
+                      <form phx-submit="planner_chat" class="flex gap-2">
+                        <input
+                          type="text"
+                          name="message"
+                          placeholder="Change the plan..."
+                          autocomplete="off"
+                          class="flex-1 bg-transparent border-b border-base-content/20 px-0 py-2 text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20 placeholder:italic"
+                        />
+                        <button
+                          type="submit"
+                          class="font-mono text-[10px] tracking-widest uppercase border border-base-content/30 px-3 py-1.5 hover:bg-base-content hover:text-base-100 hover:border-base-content transition-colors duration-100"
+                        >
+                          Re-plan
+                        </button>
+                      </form>
+
+                      <div class="flex gap-2 pt-1">
+                        <button
+                          phx-click="continue"
+                          class="font-mono text-[10px] tracking-widest uppercase bg-base-content text-base-100 px-4 py-1.5 border border-base-content hover:bg-transparent hover:text-base-content transition-colors duration-100"
+                        >
+                          Start
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -319,6 +416,7 @@ defmodule ForgeWeb.DashboardLive do
                   saved_output={@step_outputs[step.index]}
                   diff={@step_diffs[step.index]}
                   editing={@editing_step == step.index}
+                  user_notes={Map.get(@user_notes, step.id, [])}
                 />
               </div>
             </div>
@@ -503,6 +601,8 @@ defmodule ForgeWeb.DashboardLive do
             agent_role={@agent_role}
             agent_started_at={@agent_started_at}
             merge_error={@merge_error}
+            done={@done}
+            total={@total}
           />
           <div class="flex items-center gap-3 font-mono text-[10px] text-base-content/35">
             <button
@@ -549,17 +649,21 @@ defmodule ForgeWeb.DashboardLive do
       </div>
       <%!-- Header: index + role + description (editable) + tags --%>
       <div class={[
-        "flex items-start gap-3 px-4 py-3",
-        (@step.status == :done || @is_running || @diff) && "border-b",
+        "flex items-start gap-3 px-4",
+        @step.status == :done && "py-2",
+        @step.status != :done && "py-3",
+        (@step.status == :done || @is_running || @step.status == :failed || @diff) && "border-b",
         @is_running && "border-base-content/15",
-        !@is_running && "border-base-content/10"
+        !@is_running && "border-base-content/5"
       ]}>
         <span class={[
           "font-mono text-[10px] mt-1 w-4 text-right flex-shrink-0",
           @step.status == :done && "text-base-content/30",
-          @is_running && "text-base-content/50"
+          @step.status == :failed && "text-base-content/60",
+          @is_running && "text-base-content/50",
+          @step.status == :todo && !@is_running && "text-base-content/30"
         ]}>
-          {@step.index}
+          {if @step.status == :done, do: raw("&#x2713;"), else: @step.index}
         </span>
 
         <span class={[
@@ -571,9 +675,9 @@ defmodule ForgeWeb.DashboardLive do
           @{@step.role}
         </span>
 
-        <%!-- Description: editable on click --%>
+        <%!-- Description: editable on click (only for non-done tasks) --%>
         <div class="flex-1 min-w-0">
-          <form :if={@editing} phx-submit="save_step" class="space-y-2">
+          <form :if={@editing && @step.status != :done} phx-submit="save_step" class="space-y-2">
             <input type="hidden" name="index" value={@step.index} />
             <div class="flex gap-2">
               <textarea
@@ -610,9 +714,17 @@ defmodule ForgeWeb.DashboardLive do
               >{@step.acceptance_criteria}</textarea>
             </div>
           </form>
+          <%!-- Done: static text, no click --%>
           <div
-            :if={!@editing}
-            class={["text-sm cursor-pointer", @step.status == :done && "text-base-content/60"]}
+            :if={!@editing && @step.status == :done}
+            class="text-sm text-base-content/50 line-through decoration-base-content/15"
+          >
+            {highlight_files(@step.description)}
+          </div>
+          <%!-- Not done: clickable to edit --%>
+          <div
+            :if={!@editing && @step.status != :done}
+            class="text-sm cursor-pointer"
             phx-click="edit_step"
             phx-value-index={@step.index}
           >
@@ -626,11 +738,30 @@ defmodule ForgeWeb.DashboardLive do
           </span>
           <button
             :if={@is_running}
+            phx-click="kill_task"
+            phx-value-id={@step.id}
+            data-confirm="Kill this task?"
+            class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
+            title="Kill task"
+          >
+            &#x25A0;
+          </button>
+          <button
+            :if={@is_running}
             phx-click="restart_task"
             phx-value-id={@step.id}
             data-confirm="Kill and restart this task?"
             class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
             title="Kill & restart"
+          >
+            &#x21bb;
+          </button>
+          <button
+            :if={@step.status == :failed}
+            phx-click="retry_task"
+            phx-value-id={@step.id}
+            class="font-mono text-[9px] text-base-content/30 hover:text-base-content transition-colors"
+            title="Retry task"
           >
             &#x21bb;
           </button>
@@ -702,11 +833,46 @@ defmodule ForgeWeb.DashboardLive do
 
       <%!-- Body --%>
       <div :if={@step.status in [:done, :failed] || @is_running || @diff} class="px-4 py-3 space-y-3">
-        <%!-- Completion details --%>
-        <div :if={@step.details != []} class="space-y-0.5">
+        <%!-- Completion details: compact for done, full for failed --%>
+        <div :if={@step.details != [] && @step.status == :done} class="flex items-baseline gap-2">
+          <span class="font-mono text-xs text-base-content/40">
+            {List.first(@step.details)}
+          </span>
+          <details :if={length(@step.details) > 1} class="inline group">
+            <summary class="cursor-pointer font-mono text-[9px] tracking-wider uppercase text-base-content/25 hover:text-base-content/50">
+              +{length(@step.details) - 1} more
+            </summary>
+            <div class="mt-1 space-y-0.5">
+              <div :for={detail <- tl(@step.details)} class="font-mono text-xs text-base-content/35">
+                {detail}
+              </div>
+            </div>
+          </details>
+        </div>
+        <div :if={@step.details != [] && @step.status != :done} class="space-y-0.5">
           <div :for={detail <- @step.details} class="font-mono text-xs text-base-content/50">
             {detail}
           </div>
+        </div>
+
+        <%!-- Screenshots --%>
+        <div :if={@step.screenshots != []} class="flex flex-wrap gap-2 pt-1">
+          <a
+            :for={shot <- @step.screenshots}
+            href={~p"/images/#{shot.id}"}
+            target="_blank"
+            class="group relative block border border-base-content/10 hover:border-base-content/30 transition-colors"
+          >
+            <img
+              src={~p"/images/#{shot.id}"}
+              alt={shot.filename}
+              class="h-32 w-auto object-cover"
+              loading="lazy"
+            />
+            <span class="absolute bottom-0 left-0 right-0 bg-base-100/80 font-mono text-[9px] px-1.5 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+              {shot.filename}
+            </span>
+          </a>
         </div>
 
         <%!-- Agent output (live) --%>
@@ -726,6 +892,34 @@ defmodule ForgeWeb.DashboardLive do
         >
           Starting...
         </div>
+
+        <%!-- User notes sent to running agent --%>
+        <div :if={@is_running && @user_notes != []} class="space-y-1 pt-2">
+          <div
+            :for={note <- @user_notes}
+            class="font-mono text-xs text-base-content/50 pl-3 border-l-2 border-base-content/15"
+          >
+            <span class="text-base-content/30">you:</span> {note}
+          </div>
+        </div>
+
+        <%!-- Chat input for running agent --%>
+        <form :if={@is_running} phx-submit="send_note" class="flex gap-2 pt-2">
+          <input type="hidden" name="task_id" value={@step.id} />
+          <input
+            type="text"
+            name="message"
+            placeholder="Add context..."
+            class="flex-1 bg-transparent border border-base-content/15 px-2 py-1 font-mono text-xs focus:outline-none focus:border-base-content/40 placeholder:text-base-content/20"
+            autocomplete="off"
+          />
+          <button
+            type="submit"
+            class="font-mono text-[9px] tracking-wider uppercase border border-base-content/20 px-2 py-1 hover:bg-base-content hover:text-base-100 transition-colors"
+          >
+            Send
+          </button>
+        </form>
 
         <%!-- Saved agent output (for completed steps) --%>
         <details :if={!@is_running && @saved_output && @saved_output != []} class="group">
@@ -753,7 +947,7 @@ defmodule ForgeWeb.DashboardLive do
         </button>
 
         <%!-- Diff viewer --%>
-        <div :if={@diff && is_list(@diff)} class="space-y-2">
+        <div :if={@diff && is_list(@diff)} class="space-y-1">
           <details :for={file <- @diff} class="group border border-base-content/10">
             <summary class="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-base-200/50 transition-colors duration-100">
               <div class="flex items-center gap-2">
@@ -766,13 +960,13 @@ defmodule ForgeWeb.DashboardLive do
                 <span class="font-mono text-xs">{file.path}</span>
               </div>
               <span class="font-mono text-[10px] text-base-content/30">
-                <span class="text-base-content/50">+{elem(file.stats, 0)}</span>
+                <span class="text-green-500/70">+{elem(file.stats, 0)}</span>
                 <span class="text-base-content/30 mx-1">/</span>
-                <span class="text-base-content/50">-{elem(file.stats, 1)}</span>
+                <span class="text-red-400/70">-{elem(file.stats, 1)}</span>
               </span>
             </summary>
             <div class="border-t border-base-content/10 overflow-x-auto">
-              <table class="w-full font-mono text-[11px] leading-relaxed">
+              <table class="w-full font-mono text-[11px] leading-tight">
                 <tbody>
                   <tr :for={line <- file.lines} class={line_row_class(line.type)}>
                     <%= if line.type == :hunk_header do %>
@@ -853,11 +1047,9 @@ defmodule ForgeWeb.DashboardLive do
   defp render_footer(%{state: :planning_done} = assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="continue" class={@pri}>Continue</button>
-      <button phx-click="replan" class={@sec}>Re-plan</button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      Plan ready — review steps above
+      Plan ready — review and start above
     </div>
     """
   end
@@ -866,11 +1058,10 @@ defmodule ForgeWeb.DashboardLive do
     ~H"""
     <div class="flex gap-1">
       <button phx-click="pause" class={@sec}>Pause</button>
-      <button phx-click="skip" class={@sec}>Skip</button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
       <span :if={@agent_role}>@{@agent_role} running{format_elapsed(@agent_started_at)}</span>
-      <span :if={!@agent_role}>Dispatching...</span>
+      <span :if={!@agent_role}>{@done}/{@total} — dispatching next...</span>
     </div>
     """
   end
@@ -878,7 +1069,7 @@ defmodule ForgeWeb.DashboardLive do
   defp render_footer(%{state: :paused} = assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="continue" class={@pri}>Continue</button>
+      <button phx-click="continue" class={@pri}>Resume</button>
       <button
         phx-click="stop_session"
         data-confirm="Stop this session? The agent will be killed."
@@ -894,18 +1085,16 @@ defmodule ForgeWeb.DashboardLive do
   defp render_footer(%{state: :stopped_human} = assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="continue" class={@pri}>Approve &amp; Continue</button>
-      <button phx-click="skip" class={@sec}>Skip</button>
     </div>
-    <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">Your turn</div>
+    <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
+      Waiting for your input above
+    </div>
     """
   end
 
   defp render_footer(%{state: :stopped_error} = assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="retry" class={@pri}>Retry</button>
-      <button phx-click="skip" class={@sec}>Skip</button>
       <button
         phx-click="merge_into_main"
         data-confirm="Merge into main despite errors?"
@@ -915,7 +1104,7 @@ defmodule ForgeWeb.DashboardLive do
       </button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      <span :if={!@merge_error}>Error — see details above</span>
+      <span :if={!@merge_error}>Task failed — retry or skip above</span>
       <span :if={@merge_error} class="text-error">{@merge_error}</span>
     </div>
     """
@@ -924,8 +1113,7 @@ defmodule ForgeWeb.DashboardLive do
   defp render_footer(%{state: :stopped_loop_limit} = assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="skip" class={@pri}>Skip</button>
-      <button phx-click="continue" class={@sec}>Force Continue</button>
+      <button phx-click="continue" class={@sec}>Force Resume</button>
       <button
         phx-click="merge_into_main"
         data-confirm="Merge into main despite loop limit?"
@@ -935,7 +1123,7 @@ defmodule ForgeWeb.DashboardLive do
       </button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
-      <span :if={!@merge_error}>QA-dev loop limit reached</span>
+      <span :if={!@merge_error}>QA-dev loop limit — skip task above or force resume</span>
       <span :if={@merge_error} class="text-error">{@merge_error}</span>
     </div>
     """
@@ -975,8 +1163,7 @@ defmodule ForgeWeb.DashboardLive do
   defp render_footer(assigns) do
     ~H"""
     <div class="flex gap-1">
-      <button phx-click="continue" class={@pri}>Continue</button>
-      <button phx-click="pause" class={@sec}>Pause</button>
+      <button phx-click="continue" class={@pri}>Resume</button>
     </div>
     <div class="font-mono text-[10px] tracking-wider text-base-content/40 uppercase">
       {orchestrator_label(@state)}
@@ -1033,16 +1220,35 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_event("restart_task", %{"id" => task_id}, socket) do
-    # Kill the running agent and reset task to planned for re-dispatch
-    Forge.Scheduler.skip_task(socket.assigns.session_id, task_id)
+    session_id = socket.assigns.session_id
+    # Synchronous kill — waits for agent to die and task to be marked :failed
+    Forge.Scheduler.kill_task(session_id, task_id)
 
-    # Re-fetch the task and reset it to planned
+    # Now safely retry (:failed -> :planned)
     case Forge.Repo.get(Forge.Schemas.Task, task_id) do
       nil -> :ok
       task -> TaskEngine.retry_task(task)
     end
 
-    Forge.Scheduler.resume(socket.assigns.session_id)
+    Forge.Scheduler.resume(session_id)
+    {:noreply, reload_tasks(socket)}
+  end
+
+  def handle_event("kill_task", %{"id" => task_id}, socket) do
+    Forge.Scheduler.kill_task(socket.assigns.session_id, task_id)
+    {:noreply, reload_tasks(socket)}
+  end
+
+  def handle_event("retry_task", %{"id" => task_id}, socket) do
+    case Forge.Repo.get(Forge.Schemas.Task, task_id) do
+      %{state: :failed} = task ->
+        TaskEngine.retry_task(task)
+        Forge.Scheduler.resume(socket.assigns.session_id)
+
+      _ ->
+        :ok
+    end
+
     {:noreply, reload_tasks(socket)}
   end
 
@@ -1138,6 +1344,30 @@ defmodule ForgeWeb.DashboardLive do
     {:noreply, reload_tasks(socket)}
   end
 
+  def handle_event("send_note", %{"task_id" => task_id, "message" => message}, socket) do
+    message = String.trim(message)
+
+    if message != "" do
+      session_id = socket.assigns.session_id
+      Forge.Scheduler.send_message(session_id, task_id, message)
+
+      notes = Map.update(socket.assigns.user_notes, task_id, [message], &(&1 ++ [message]))
+
+      # Track planner notes separately for the planner card
+      socket =
+        if task_id == socket.assigns.running_task_id &&
+             socket.assigns.orchestrator_state == :planning do
+          assign(socket, :planner_notes, socket.assigns.planner_notes ++ [message])
+        else
+          socket
+        end
+
+      {:noreply, assign(socket, :user_notes, notes)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("add_task", %{"title" => title}, socket) do
     title = String.trim(title)
 
@@ -1152,6 +1382,47 @@ defmodule ForgeWeb.DashboardLive do
     end
 
     {:noreply, reload_tasks(socket)}
+  end
+
+  def handle_event("planner_chat", %{"message" => message}, socket) do
+    message = String.trim(message)
+
+    if message == "" do
+      {:noreply, socket}
+    else
+      session_id = socket.assigns.session_id
+
+      # Delete all planned (not yet started) tasks
+      TaskEngine.delete_planned_tasks(session_id)
+
+      # Build enriched prompt with previous plan context
+      previous_plan = socket.assigns.plan_markdown || ""
+
+      prompt = """
+      Original goal: #{socket.assigns.goal}
+
+      Previous plan:
+      #{previous_plan}
+
+      User feedback: #{message}
+
+      Revise the plan based on the user's feedback. Output the full updated plan and tasks.
+      """
+
+      # Create a new planner task with context
+      session = Forge.Repo.get!(Forge.Schemas.Session, session_id)
+
+      TaskEngine.create_task(session, %{
+        role: :planner,
+        title: "Re-plan: #{String.slice(message, 0, 50)}",
+        prompt: prompt
+      })
+
+      # Resume scheduler so the planner can run
+      Forge.Scheduler.resume(session_id)
+
+      {:noreply, reload_tasks(socket)}
+    end
   end
 
   def handle_event("replan", _params, socket) do
@@ -1265,9 +1536,12 @@ defmodule ForgeWeb.DashboardLive do
   def handle_event("merge_into_main", _params, socket) do
     case Forge.Session.merge_into_main(socket.assigns.session_id) do
       :ok ->
+        projects = group_sessions(Forge.Session.list_sessions())
+
         {:noreply,
          socket
          |> assign(:orchestrator_state, :merged)
+         |> assign(:projects, projects)
          |> assign(:page_title, page_title(:merged, nil, 0, 0))}
 
       {:error, reason} ->
@@ -1368,6 +1642,16 @@ defmodule ForgeWeb.DashboardLive do
     {:noreply, socket}
   end
 
+  def handle_info({:plan_updated, _session_id}, socket) do
+    session = Forge.Repo.get(Forge.Schemas.Session, socket.assigns.session_id)
+    plan_md = session && session.plan_markdown
+
+    {:noreply,
+     socket
+     |> assign(:plan_markdown, plan_md)
+     |> assign(:plan_html, Forge.PlanRenderer.render(plan_md))}
+  end
+
   def handle_info({:scheduler_paused, _}, socket) do
     {:noreply, assign(socket, :orchestrator_state, :paused)}
   end
@@ -1389,6 +1673,19 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_info(:tick, socket) do
+    tick = (socket.assigns[:tick_count] || 0) + 1
+    socket = assign(socket, :tick_count, tick)
+
+    # Every 5 seconds, refresh from DB and check for stuck state
+    socket =
+      if rem(tick, 5) == 0 do
+        socket = reload_tasks(socket)
+        maybe_auto_recover(socket)
+      else
+        socket
+      end
+
+    # Force re-render for elapsed time display
     if socket.assigns.agent_started_at do
       {:noreply, assign(socket, :agent_started_at, socket.assigns.agent_started_at)}
     else
@@ -1530,6 +1827,9 @@ defmodule ForgeWeb.DashboardLive do
       <% @s.waiting_human > 0 -> %>
         <%!-- Needs human: hollow blinking circle --%>
         <div class="w-2 h-2 flex-shrink-0 rounded-full border-2 border-base-content animate-attention" />
+      <% @s.done == @s.total and @s.total > 0 -> %>
+        <%!-- Complete / ready to merge: blinking solid circle --%>
+        <div class="w-2 h-2 flex-shrink-0 rounded-full bg-base-content animate-attention" />
       <% @s.in_progress > 0 -> %>
         <%!-- Running: marching-ants circle --%>
         <svg class="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 12 12">
@@ -1544,9 +1844,6 @@ defmodule ForgeWeb.DashboardLive do
             class="animate-march"
           />
         </svg>
-      <% @s.done == @s.total and @s.total > 0 -> %>
-        <%!-- Complete: solid dot --%>
-        <div class="w-1.5 h-1.5 flex-shrink-0 bg-base-content" />
       <% @s.done > 0 -> %>
         <%!-- Partial: half-filled dot --%>
         <div class="w-1.5 h-1.5 flex-shrink-0 bg-base-content/50" />
@@ -1605,8 +1902,8 @@ defmodule ForgeWeb.DashboardLive do
   defp file_status_label(:renamed), do: "ren"
   defp file_status_label(_), do: "mod"
 
-  defp line_row_class(:add), do: "bg-base-200"
-  defp line_row_class(:remove), do: "bg-base-content/[0.08]"
+  defp line_row_class(:add), do: "bg-green-500/10"
+  defp line_row_class(:remove), do: "bg-red-500/10"
   defp line_row_class(:hunk_header), do: ""
   defp line_row_class(_), do: ""
 
@@ -1614,8 +1911,8 @@ defmodule ForgeWeb.DashboardLive do
   defp line_marker(:remove), do: "-"
   defp line_marker(_), do: " "
 
-  defp line_marker_class(:add), do: "text-base-content/60 font-bold"
-  defp line_marker_class(:remove), do: "text-base-content/40"
+  defp line_marker_class(:add), do: "text-green-500 font-bold"
+  defp line_marker_class(:remove), do: "text-red-400"
   defp line_marker_class(_), do: "text-base-content/15"
 
   defp strip_markdown(nil), do: ""
@@ -1647,6 +1944,15 @@ defmodule ForgeWeb.DashboardLive do
         _ -> :todo
       end
 
+    # Load screenshots for completed tasks
+    screenshots =
+      if task.state in [:done, :failed] do
+        import Ecto.Query
+        Forge.Repo.all(from i in Forge.Schemas.Image, where: i.task_id == ^task.id, select: %{id: i.id, filename: i.filename})
+      else
+        []
+      end
+
     %{
       index: task.sort_order,
       id: task.id,
@@ -1657,6 +1963,7 @@ defmodule ForgeWeb.DashboardLive do
       prompt: task.prompt,
       acceptance_criteria: task.acceptance_criteria,
       details: details,
+      screenshots: screenshots,
       tags: %{}
     }
   end
@@ -1691,6 +1998,10 @@ defmodule ForgeWeb.DashboardLive do
     planner_done = Enum.any?(tasks, &(&1.role == :planner and &1.state == :done))
     only_planner = tasks != [] and Enum.all?(tasks, &(&1.role == :planner))
 
+    # Has any non-planner work completed? If so, execution has started.
+    has_started =
+      Enum.any?(tasks, fn t -> t.role != :planner and t.state in [:done, :failed] end)
+
     # Failed tasks that have child tasks (fix cycles) are "resolved" — don't block completion
     has_unresolved_failure =
       Enum.any?(tasks, fn task ->
@@ -1708,14 +2019,15 @@ defmodule ForgeWeb.DashboardLive do
     cond do
       session.state == :paused -> :paused
       has_planner_running -> :planning
+      # Plan review: only when planner just finished and no work has started yet
       planner_done and only_planner and not autopilot -> :planning_done
       has_running -> :cruising
       has_unresolved_failure -> :stopped_error
       all_done -> :complete
-      has_planned and not autopilot -> :planning_done
-      # Autopilot: scheduler will dispatch planned tasks, show cruising not planning_done
-      has_planned and autopilot -> :cruising
-      planner_done and only_planner and autopilot -> :cruising
+      # Fresh plan, no work started yet — show plan review
+      has_planned and not autopilot and not has_started -> :planning_done
+      # Work already underway with remaining tasks — scheduler should be dispatching
+      has_planned -> :cruising
       true -> :idle
     end
   end
@@ -1734,6 +2046,7 @@ defmodule ForgeWeb.DashboardLive do
     steps = Enum.map(tasks, &task_to_step/1)
     session = Forge.Repo.get(Forge.Schemas.Session, session_id)
     orch_state = derive_orchestrator_state(tasks, session)
+    plan_md = session && session.plan_markdown
 
     socket
     |> assign(:steps, steps)
@@ -1741,7 +2054,36 @@ defmodule ForgeWeb.DashboardLive do
     |> assign(:total, total)
     |> assign(:orchestrator_state, orch_state)
     |> assign(:agent_role, current_agent_role(tasks))
+    |> assign(:plan_markdown, plan_md)
+    |> assign(:plan_html, Forge.PlanRenderer.render(plan_md))
     |> assign(:page_title, page_title(orch_state, current_agent_role(tasks), done, total))
     |> maybe_notify(orch_state)
+  end
+
+  # Detect stuck sessions and auto-recover.
+  # Stuck = :cruising with no agent actually running, or scheduler is dead.
+  defp maybe_auto_recover(socket) do
+    session_id = socket.assigns.session_id
+    orch_state = socket.assigns.orchestrator_state
+
+    cond do
+      # Cruising but nothing actually running — scheduler is stuck
+      orch_state == :cruising and socket.assigns.agent_role == nil ->
+        if Forge.Scheduler.alive?(session_id) do
+          Forge.Scheduler.resume(session_id)
+        else
+          Forge.Session.ensure_running(session_id)
+        end
+
+        socket
+
+      # Active session but scheduler is dead — restart it
+      orch_state in [:planning, :cruising] and not Forge.Scheduler.alive?(session_id) ->
+        Forge.Session.ensure_running(session_id)
+        socket
+
+      true ->
+        socket
+    end
   end
 end

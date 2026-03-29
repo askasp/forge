@@ -31,6 +31,7 @@ defmodule ForgeWeb.Router do
     get "/tools", ApiController, :tools
     get "/get_project_info", ApiController, :get_project_info
     post "/update_context", ApiController, :update_context
+    post "/screenshot", ApiController, :screenshot
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

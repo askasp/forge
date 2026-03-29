@@ -92,6 +92,9 @@ handle_tool_call() {
     forge_update_context)
       result=$(http_post "${API}/update_context" "$args")
       ;;
+    forge_screenshot)
+      result=$(http_post "${API}/screenshot" "$args")
+      ;;
     *)
       result="{\"error\":\"unknown tool: ${name}\"}"
       ;;

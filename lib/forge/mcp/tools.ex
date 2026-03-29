@@ -22,6 +22,21 @@ defmodule Forge.MCP.Tools do
           },
           required: ["section", "content"]
         }
+      },
+      %{
+        name: "forge_screenshot",
+        description:
+          "Take a screenshot of a URL using headless Chrome. " <>
+            "Starts the project's dev server if needed. " <>
+            "Returns the screenshot image URL for embedding in results.",
+        input_schema: %{
+          type: "object",
+          properties: %{
+            url: %{type: "string", description: "Full URL to screenshot (e.g. http://localhost:4000/dashboard)"},
+            name: %{type: "string", description: "Short descriptive name for the screenshot (e.g. 'login-page')"}
+          },
+          required: ["url", "name"]
+        }
       }
     ]
   end

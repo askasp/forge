@@ -69,10 +69,13 @@ defmodule Forge.Schemas.Task do
 
   defp valid_transition?(:planned, :assigned), do: true
   defp valid_transition?(:planned, :done), do: true
+  defp valid_transition?(:planned, :failed), do: true
   defp valid_transition?(:assigned, :in_progress), do: true
   defp valid_transition?(:assigned, :done), do: true
+  defp valid_transition?(:assigned, :failed), do: true
   defp valid_transition?(:in_progress, :done), do: true
   defp valid_transition?(:in_progress, :failed), do: true
   defp valid_transition?(:failed, :planned), do: true
+  defp valid_transition?(:done, :planned), do: true
   defp valid_transition?(_, _), do: false
 end

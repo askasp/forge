@@ -21,7 +21,7 @@ defmodule Forge.MixProject do
   def application do
     [
       mod: {Forge.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :inets]
     ]
   end
 
@@ -66,7 +66,8 @@ defmodule Forge.MixProject do
       {:postgrex, ">= 0.0.0"},
       {:bandit, "~> 1.5"},
       {:file_system, "~> 1.0"},
-      {:toml, "~> 0.7"}
+      {:toml, "~> 0.7"},
+      {:earmark, "~> 1.4"}
     ]
   end
 

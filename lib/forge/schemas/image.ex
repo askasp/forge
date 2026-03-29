@@ -11,14 +11,16 @@ defmodule Forge.Schemas.Image do
     field :data, :binary
 
     belongs_to :session, Forge.Schemas.Session
+    belongs_to :task, Forge.Schemas.Task
 
     timestamps(type: :utc_datetime)
   end
 
   def changeset(image, attrs) do
     image
-    |> cast(attrs, [:session_id, :filename, :content_type, :data])
+    |> cast(attrs, [:session_id, :task_id, :filename, :content_type, :data])
     |> validate_required([:session_id, :filename, :content_type, :data])
     |> foreign_key_constraint(:session_id)
+    |> foreign_key_constraint(:task_id)
   end
 end

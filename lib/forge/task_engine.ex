@@ -143,21 +143,22 @@ defmodule Forge.TaskEngine do
   end
 
   @doc "Reparent planned tasks: move depends_on from old task to new task."
-  def reparent_dependents(old_task_id, new_task_id) do
+  def reparent_dependents(old_task_id, new_task_id, exclude_ids \\ []) do
     from(t in Task,
       where: t.depends_on_id == ^old_task_id,
-      where: t.state == :planned
+      where: t.state == :planned,
+      where: t.id not in ^exclude_ids
     )
     |> Repo.update_all(set: [depends_on_id: new_task_id])
   end
 
-  @doc "Fail any in_progress tasks for a session (used on restart to clean up orphans)."
-  def fail_orphaned_tasks(session_id) do
+  @doc "Reset orphaned in-progress tasks back to :planned so they get re-dispatched."
+  def reset_orphaned_tasks(session_id) do
     from(t in Task,
       where: t.session_id == ^session_id,
       where: t.state in [:assigned, :in_progress]
     )
-    |> Repo.update_all(set: [state: :failed])
+    |> Repo.update_all(set: [state: :planned])
   end
 
   # ── Agent Runs ─────────────────────────────────────────────────

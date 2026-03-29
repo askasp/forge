@@ -113,7 +113,7 @@ defmodule Forge.Session do
       if state_filter do
         where(query, [s], s.state == ^state_filter)
       else
-        query
+        where(query, [s], s.state in [:active, :paused])
       end
 
     Repo.all(query)
@@ -129,8 +129,8 @@ defmodule Forge.Session do
       if session.worktree_path && File.dir?(session.worktree_path) do
         Logger.info("[Session] Restoring session #{session.id}")
 
-        # Fail any orphaned in-progress tasks
-        TaskEngine.fail_orphaned_tasks(session.id)
+        # Reset orphaned tasks to :planned so they get re-dispatched
+        TaskEngine.reset_orphaned_tasks(session.id)
 
         # Reload project config from disk
         project = Forge.Project.load(session.project.repo_path)
@@ -257,6 +257,20 @@ defmodule Forge.Session do
                 stderr_to_stdout: true
               )
 
+              # Delete agent runs and tasks (agent_runs FK cascades from tasks,
+              # but explicit delete is faster than loading all task IDs)
+              task_ids =
+                from(t in Forge.Schemas.Task,
+                  where: t.session_id == ^session_id,
+                  select: t.id
+                )
+
+              from(r in Forge.Schemas.AgentRun, where: r.task_id in subquery(task_ids))
+              |> Repo.delete_all()
+
+              from(t in Forge.Schemas.Task, where: t.session_id == ^session_id)
+              |> Repo.delete_all()
+
               session |> Session.changeset(%{state: :complete}) |> Repo.update()
               Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
               :ok
@@ -309,6 +323,22 @@ defmodule Forge.Session do
 
   # ── Private ──────────────────────────────────────────────────────
 
+  @doc "Ensure session processes are running. Restarts them if dead."
+  def ensure_running(session_id) do
+    if not Forge.Scheduler.alive?(session_id) do
+      case Repo.get(Session, session_id) |> Repo.preload(:project) do
+        %{state: :active, project: %{repo_path: repo_path}} = session ->
+          Logger.warning("[Session] Restarting dead processes for session #{session_id}")
+          TaskEngine.reset_orphaned_tasks(session_id)
+          project = Forge.Project.load(repo_path)
+          start_session_processes(session, project)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
   defp start_session_processes(session, project) do
     child_spec = {Forge.Session.Supervisor, session: session, project: project}
 
@@ -351,6 +381,7 @@ defmodule Forge.Session do
     parent =
       worktree_path |> String.replace(~r/\.worktrees\/.*$/, "") |> String.trim_trailing("/")
 
+    # Symlink node_modules from parent
     for subdir <- ["", "backend", "frontend", "backoffice"] do
       source = Path.join([parent, subdir, "node_modules"])
       target = Path.join([worktree_path, subdir, "node_modules"])
@@ -359,6 +390,16 @@ defmodule Forge.Session do
         File.ln_s!(source, target)
         Logger.info("[Session] Symlinked #{subdir}/node_modules")
       end
+    end
+
+    # Install Elixir deps if mix.exs is present
+    if File.exists?(Path.join(worktree_path, "mix.exs")) do
+      Logger.info("[Session] Running mix deps.get in worktree")
+
+      System.cmd("mix", ["deps.get"],
+        cd: worktree_path,
+        stderr_to_stdout: true
+      )
     end
   end
 

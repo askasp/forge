@@ -42,8 +42,26 @@ defmodule Forge.Scheduler do
     GenServer.cast(via(session_id), {:skip_task, task_id})
   end
 
+  @doc "Kill a running task synchronously. Returns :ok. Task is marked :failed."
+  def kill_task(session_id, task_id) do
+    GenServer.call(via(session_id), {:kill_task, task_id})
+  end
+
   def set_automation(session_id, level) do
     GenServer.cast(via(session_id), {:set_automation, level})
+  end
+
+  @doc "Send a user message to a running task. Written to .forge/user-notes.md in the worktree."
+  def send_message(session_id, _task_id, message) do
+    GenServer.cast(via(session_id), {:send_message, message})
+  end
+
+  @doc "Check if the scheduler process for a session is alive."
+  def alive?(session_id) do
+    case Registry.lookup(Forge.SessionRegistry, {:scheduler, session_id}) do
+      [{pid, _}] -> Process.alive?(pid)
+      [] -> false
+    end
   end
 
   defp via(session_id) do
@@ -69,8 +87,10 @@ defmodule Forge.Scheduler do
       cycle_counts: Pipeline.init_cycle_counts(pipeline)
     }
 
-    # Check for ready tasks on startup (handles restart recovery)
+    # Recover stuck tasks and dispatch on startup
+    state = recover_stuck(state)
     send(self(), :check_dispatch)
+    schedule_health_check()
 
     {:ok, state}
   end
@@ -85,6 +105,7 @@ defmodule Forge.Scheduler do
   def handle_cast(:resume, state) do
     Logger.info("[Scheduler] Resumed session #{state.session_id}")
     state = %{state | paused: false}
+    state = recover_stuck(state)
     broadcast(state.session_id, {:scheduler_resumed, state.session_id})
     {:noreply, maybe_dispatch(state)}
   end
@@ -116,6 +137,42 @@ defmodule Forge.Scheduler do
   def handle_cast({:set_automation, level}, state) do
     Logger.info("[Scheduler] Automation changed to #{level}")
     {:noreply, %{state | automation: level}}
+  end
+
+  def handle_cast({:send_message, message}, state) do
+    notes_path = Path.join([state.session.worktree_path, ".forge", "user-notes.md"])
+    File.mkdir_p!(Path.dirname(notes_path))
+
+    timestamp = Calendar.strftime(DateTime.utc_now(), "%H:%M:%S")
+    entry = "\n## User note (#{timestamp})\n\n#{message}\n"
+
+    File.write!(notes_path, entry, [:append])
+    Logger.info("[Scheduler] User note added for session #{state.session_id}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:kill_task, task_id}, _from, state) do
+    state =
+      case Map.get(state.running, task_id) do
+        {pid, ref} ->
+          Process.demonitor(ref, [:flush])
+          Process.exit(pid, :kill)
+          %{state | running: Map.delete(state.running, task_id)}
+
+        nil ->
+          state
+      end
+
+    case Forge.Repo.get(Forge.Schemas.Task, task_id) do
+      %{state: s} = task when s in [:planned, :assigned, :in_progress] ->
+        TaskEngine.fail_task(task, %{error: "Killed by user"})
+
+      _ ->
+        :ok
+    end
+
+    {:reply, :ok, maybe_dispatch(state)}
   end
 
   @impl true
@@ -151,11 +208,24 @@ defmodule Forge.Scheduler do
 
         state =
           if exit_code == 0 do
-            # Create follow-up tasks first (before broadcasting :done)
-            state = process_result(task, structured, state)
-            # Then transition — this broadcasts :task_updated to LiveView
-            TaskEngine.transition(task, :done, structured)
-            state
+            try do
+              # Create follow-up tasks first (before broadcasting :done)
+              state = process_result(task, structured, state)
+              # Then transition — this broadcasts :task_updated to LiveView
+              TaskEngine.transition(task, :done, structured)
+              state
+            rescue
+              e ->
+                Logger.error(
+                  "[Scheduler] process_result crashed for task #{task_id}: #{Exception.message(e)}"
+                )
+
+                TaskEngine.fail_task(task, %{
+                  error: "Result processing failed: #{Exception.message(e)}"
+                })
+
+                state
+            end
           else
             TaskEngine.fail_task(task, %{exit_code: exit_code, error: Map.get(result, :error)})
             state
@@ -182,6 +252,12 @@ defmodule Forge.Scheduler do
       nil ->
         {:noreply, state}
     end
+  end
+
+  def handle_info(:health_check, state) do
+    state = recover_stuck(state)
+    schedule_health_check()
+    {:noreply, maybe_dispatch(state)}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -221,41 +297,57 @@ defmodule Forge.Scheduler do
   end
 
   defp dispatch_task(task, state) do
-    # Show progress immediately before any I/O
-    broadcast(state.session_id, {:agent_setup, task.id, task.role, "building prompt"})
+    # Clear user notes from previous runs
+    notes_path = Path.join([state.session.worktree_path, ".forge", "user-notes.md"])
+    File.rm(notes_path)
 
-    # Build prompt
-    prompt = PromptBuilder.build(state.project, task.role, task.prompt)
+    try do
+      # Show progress immediately before any I/O
+      broadcast(state.session_id, {:agent_setup, task.id, task.role, "building prompt"})
 
-    # Transition to assigned
-    TaskEngine.transition(task, :assigned)
+      # Build prompt
+      prompt = PromptBuilder.build(state.project, task.role, task.prompt)
 
-    # Create agent run record
-    {:ok, agent_run} = TaskEngine.create_agent_run(task)
+      # Transition to assigned
+      TaskEngine.transition(task, :assigned)
 
-    broadcast(state.session_id, {:agent_setup, task.id, task.role, "starting agent"})
+      # Create agent run record
+      {:ok, agent_run} = TaskEngine.create_agent_run(task)
 
-    # Start AgentRunner under the session's AgentSupervisor
-    agent_sup = Forge.Session.Supervisor.agent_sup_name(state.session_id)
+      broadcast(state.session_id, {:agent_setup, task.id, task.role, "starting agent"})
 
-    {:ok, pid} =
-      DynamicSupervisor.start_child(agent_sup, {
-        Forge.Session.AgentRunner,
-        task: task,
-        prompt: prompt,
-        scheduler: self(),
-        workdir: state.session.worktree_path,
-        session_id: state.session_id,
-        agent_run_id: agent_run.id
-      })
+      # Start AgentRunner under the session's AgentSupervisor
+      agent_sup = Forge.Session.Supervisor.agent_sup_name(state.session_id)
 
-    ref = Process.monitor(pid)
-    running = Map.put(state.running, task.id, {pid, ref})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(agent_sup, {
+          Forge.Session.AgentRunner,
+          task: task,
+          prompt: prompt,
+          scheduler: self(),
+          workdir: state.session.worktree_path,
+          session_id: state.session_id,
+          agent_run_id: agent_run.id
+        })
 
-    Logger.info("[Scheduler] Dispatched @#{task.role} for task #{task.id}")
-    broadcast(state.session_id, {:agent_started, task.id, task.role})
+      ref = Process.monitor(pid)
+      running = Map.put(state.running, task.id, {pid, ref})
 
-    %{state | running: running}
+      Logger.info("[Scheduler] Dispatched @#{task.role} for task #{task.id}")
+      broadcast(state.session_id, {:agent_started, task.id, task.role})
+
+      %{state | running: running}
+    rescue
+      e ->
+        Logger.error("[Scheduler] Failed to dispatch task #{task.id}: #{Exception.message(e)}")
+        # Re-fetch task in case it was already transitioned
+        case Forge.Repo.get(Forge.Schemas.Task, task.id) do
+          %{state: s} = t when s in [:planned, :assigned] ->
+            TaskEngine.fail_task(t, %{error: "Failed to start: #{Exception.message(e)}"})
+          _ -> :ok
+        end
+        state
+    end
   end
 
   # ── Pipeline Follow-Up Logic ───────────────────────────────────
@@ -310,6 +402,18 @@ defmodule Forge.Scheduler do
 
     if tasks != [] do
       session = Forge.Repo.get!(Forge.Schemas.Session, state.session_id)
+
+      # Store plan narrative if present
+      plan_md = result["plan"]
+
+      if plan_md do
+        session
+        |> Forge.Schemas.Session.changeset(%{plan_markdown: plan_md})
+        |> Forge.Repo.update()
+
+        broadcast(state.session_id, {:plan_updated, state.session_id})
+      end
+
       {:ok, created_tasks} = TaskEngine.create_tasks(session, tasks)
 
       # Safety net: if planner didn't include QA or review, auto-append them
@@ -430,8 +534,9 @@ defmodule Forge.Scheduler do
         })
 
       # Reparent: any planned tasks that depend on the failed task should now
-      # depend on the re-check instead (e.g., a pre-created review task)
-      TaskEngine.reparent_dependents(task.id, recheck_task.id)
+      # depend on the re-check instead (e.g., a pre-created review task).
+      # Exclude the fix and re-check tasks we just created to avoid circular deps.
+      TaskEngine.reparent_dependents(task.id, recheck_task.id, [fix_task.id, recheck_task.id])
 
       # Increment cycle count
       %{state | cycle_counts: Map.update(state.cycle_counts, role_key, 1, &(&1 + 1))}
@@ -498,6 +603,43 @@ defmodule Forge.Scheduler do
 
   # ── Helpers ────────────────────────────────────────────────────
 
+  # Recover from stuck states: clean dead processes from state.running,
+  # and reset orphaned tasks to :planned so they get re-dispatched.
+  defp recover_stuck(state) do
+    # 1. Find dead processes in state.running
+    {alive, dead} =
+      Enum.split_with(state.running, fn {_task_id, {pid, _ref}} ->
+        Process.alive?(pid)
+      end)
+
+    for {task_id, {_pid, ref}} <- dead do
+      Process.demonitor(ref, [:flush])
+      Logger.warning("[Scheduler] Recovering dead agent for task #{task_id}")
+    end
+
+    state = %{state | running: Map.new(alive)}
+
+    # 2. Reset any :assigned/:in_progress tasks with no running agent back to :planned
+    running_task_ids = Map.keys(state.running)
+
+    import Ecto.Query
+
+    {count, _} =
+      from(t in Forge.Schemas.Task,
+        where: t.session_id == ^state.session_id,
+        where: t.state in [:assigned, :in_progress],
+        where: t.id not in ^running_task_ids
+      )
+      |> Forge.Repo.update_all(set: [state: :planned])
+
+    if count > 0 do
+      Logger.warning("[Scheduler] Reset #{count} stuck task(s) to :planned")
+      broadcast(state.session_id, {:tasks_created, []})
+    end
+
+    state
+  end
+
   defp remove_running(state, task_id) do
     case Map.pop(state.running, task_id) do
       {{_pid, ref}, running} ->
@@ -517,6 +659,8 @@ defmodule Forge.Scheduler do
     {done, total} = TaskEngine.progress(state.session_id)
 
     if done == total and total > 0 do
+      # Stop dev server if running
+      Forge.DevServer.stop(state.session_id)
       broadcast(state.session_id, {:session_complete, state.session_id})
     end
   end
@@ -584,6 +728,10 @@ defmodule Forge.Scheduler do
   defp format_human_answer(%{"response" => r}), do: r
   defp format_human_answer(result) when is_map(result), do: inspect(result)
   defp format_human_answer(result), do: to_string(result)
+
+  defp schedule_health_check do
+    Process.send_after(self(), :health_check, 30_000)
+  end
 
   defp broadcast(session_id, event) do
     Phoenix.PubSub.broadcast(Forge.PubSub, "session:#{session_id}", event)

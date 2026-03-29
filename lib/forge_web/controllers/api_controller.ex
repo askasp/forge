@@ -76,4 +76,61 @@ defmodule ForgeWeb.ApiController do
       end
     end)
   end
+
+  # ── Screenshot ─────────────────────────────────────────────────
+
+  def screenshot(conn, %{"url" => url, "name" => name}) do
+    with_session(conn, fn session ->
+      project = Forge.Project.load(session.project.repo_path)
+
+      with :ok <- maybe_start_dev_server(session, project),
+           :ok <- maybe_wait_for_server(session.id, project),
+           {:ok, png_data} <- Forge.Screenshot.capture(url) do
+        task_id = get_req_header(conn, "x-forge-task") |> List.first()
+        filename = "#{name}-#{System.system_time(:second)}.png"
+
+        {:ok, image} =
+          %Forge.Schemas.Image{}
+          |> Forge.Schemas.Image.changeset(%{
+            session_id: session.id,
+            task_id: task_id,
+            filename: filename,
+            content_type: "image/png",
+            data: png_data
+          })
+          |> Repo.insert()
+
+        json(conn, %{ok: true, image_url: "/images/#{image.id}", filename: filename})
+      else
+        {:error, reason} ->
+          conn |> put_status(500) |> json(%{error: "Screenshot failed: #{reason}"})
+      end
+    end)
+  end
+
+  defp maybe_start_dev_server(session, project) do
+    if project.dev_start && !Forge.DevServer.running?(session.id) do
+      case DynamicSupervisor.start_child(
+             Forge.Session.Supervisor.agent_sup_name(session.id),
+             {Forge.DevServer,
+              session_id: session.id,
+              workdir: session.worktree_path,
+              dev_start: project.dev_start}
+           ) do
+        {:ok, _} -> :ok
+        {:error, {:already_started, _}} -> :ok
+        {:error, reason} -> {:error, "Failed to start dev server: #{inspect(reason)}"}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_wait_for_server(session_id, project) do
+    if project.screenshot_url do
+      Forge.DevServer.ensure_ready(session_id, project.screenshot_url)
+    else
+      :ok
+    end
+  end
 end
