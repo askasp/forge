@@ -1,45 +1,34 @@
 defmodule ForgeWeb.HomeLive do
   use ForgeWeb, :live_view
 
-  alias Forge.{Session, ProjectScanner, KnownProjects}
+  alias Forge.{Session, KnownProjects}
 
   @impl true
-  def mount(params, _session, socket) do
+  def mount(_params, _session, socket) do
     sessions = Session.list_sessions()
     projects = group_sessions_by_project(sessions)
     known = KnownProjects.list()
 
-    project_from_url = params["project"]
+    # Default to the most recently used project
+    default_project = List.first(known) || ""
 
     socket =
       socket
-      |> assign(:project_path, project_from_url || "")
+      |> assign(:project_path, default_project)
       |> assign(:goal, "")
-      |> assign(:scan, nil)
+      |> assign(:known_projects, known)
       |> assign(:sessions, sessions)
       |> assign(:projects, projects)
-      |> assign(:known_projects, known)
-      |> assign(:suggestions, if(project_from_url, do: [], else: known))
       |> assign(:error, nil)
-      |> assign(:config_saved, false)
-      |> assign(:config_collapsed, true)
       |> assign(:automation, "supervised")
-      # Config form state
-      |> assign(:selected_skills, [])
-      |> assign(:test_command, "")
-      |> assign(:dev_start, "")
-      |> assign(:branch_prefix, "wt-")
-      |> assign(:base_branch, "main")
-      |> assign(:selected_suggestion_index, nil)
+      |> assign(:creating, false)
       |> assign(:mention_results, [])
       |> assign(:mention_index, 0)
       |> assign(:mention_query, nil)
-      |> assign(:project_files, [])
-      |> assign(:creating, false)
-
-    if project_from_url && connected?(socket) do
-      send(self(), {:do_scan, project_from_url})
-    end
+      |> assign(:project_files, load_project_files(default_project))
+      |> assign(:adding_project, false)
+      |> assign(:new_project_path, "")
+      |> assign(:suggestions, [])
 
     {:ok, socket}
   end
@@ -67,336 +56,190 @@ defmodule ForgeWeb.HomeLive do
           </button>
         </div>
 
-        <%!-- Project Path --%>
-        <div class="mb-8">
-          <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
-            Project Path
-          </label>
-          <form phx-submit="scan_project" class="flex gap-3">
-            <div class="flex-1 relative" id="project-path-autocomplete" phx-hook="ProjectPathAutocomplete">
-              <input
-                type="text"
-                name="project_path"
-                value={@project_path}
-                placeholder="/Users/you/git/your-project"
-                phx-keyup="filter_suggestions"
-                phx-blur="scan_project"
-                autocomplete="off"
-                class="w-full bg-transparent border-b-2 border-base-content px-0 py-3 font-mono text-sm focus:outline-none focus:border-b-4 placeholder:text-base-content/20"
-              />
-              <%!-- Suggestions dropdown --%>
-              <div
-                :if={
-                  (@suggestions != [] && @project_path == "") ||
-                    (@suggestions != [] && @project_path != "" && !@scan)
-                }
-                data-suggestions
-                class="absolute top-full left-0 right-0 border border-base-content/20 bg-base-100 z-10 max-h-48 overflow-y-auto"
-              >
-                <button
-                  :for={{path, idx} <- Enum.with_index(@suggestions)}
-                  type="button"
-                  phx-click="select_project"
-                  phx-value-path={path}
-                  data-path={path}
-                  data-selected={to_string(@selected_suggestion_index == idx)}
-                  class={[
-                    "w-full text-left px-3 py-2 font-mono text-xs transition-colors duration-100 border-b border-base-content/5 last:border-0",
-                    @selected_suggestion_index == idx && "bg-base-content text-base-100",
-                    @selected_suggestion_index != idx && "hover:bg-base-content hover:text-base-100"
-                  ]}
+        <%!-- New Session --%>
+        <div class="mb-16">
+          <form phx-submit="start_session" class="space-y-6">
+            <%!-- Project selector --%>
+            <div>
+              <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
+                Project
+              </label>
+              <div class="flex gap-3 items-center">
+                <select
+                  :if={@known_projects != [] && !@adding_project}
+                  name="project_path"
+                  phx-change="select_project"
+                  class="flex-1 bg-transparent border-b-2 border-base-content px-0 py-3 font-mono text-sm focus:outline-none cursor-pointer appearance-none"
                 >
-                  <span class={[@selected_suggestion_index != idx && "text-base-content/40"]}>{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
-                </button>
-              </div>
-            </div>
-            <button
-              type="submit"
-              class="border-2 border-base-content px-5 py-2 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100"
-            >
-              Scan
-            </button>
-          </form>
-        </div>
-
-        <%!-- Error --%>
-        <div :if={@error} class="border-l-4 border-base-content pl-4 py-2 text-sm mb-8">
-          {@error}
-        </div>
-
-        <%!-- Project Setup (after scan) --%>
-        <div :if={@scan} class="mb-12">
-          <div class="border-t-2 border-base-content pt-6 mb-8">
-            <div class="flex items-baseline justify-between">
-              <h2 class="font-display text-2xl tracking-tight">{@scan.name}</h2>
-              <a
-                href={~p"/project/#{URI.encode(@project_path)}"}
-                class="font-mono text-[10px] tracking-widest uppercase border border-base-content px-3 py-1 hover:bg-base-content hover:text-base-100 transition-colors duration-100"
-              >
-                Project Settings
-              </a>
-            </div>
-          </div>
-
-          <%!-- Goal + Start (shown first for configured projects) --%>
-          <div class={[
-            @config_saved && "mb-8",
-            !@config_saved && "border-t-4 border-base-content pt-8 order-last"
-          ]}>
-            <form phx-submit="start_session" class="space-y-6">
-              <div>
-                <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
-                  Task
-                </label>
-                <div id="goal-mention" phx-hook="MentionAutocomplete" class="relative">
-                  <textarea
-                    name="goal"
-                    rows="3"
-                    disabled={@creating}
-                    placeholder="What do you want done? Use @ to reference files"
-                    class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
-                  >{@goal}</textarea>
-
+                  <option
+                    :for={path <- @known_projects}
+                    value={path}
+                    selected={path == @project_path}
+                  >
+                    {Path.basename(path)}
+                    <span class="text-base-content/30"> — {Path.dirname(path)}</span>
+                  </option>
+                </select>
+                <div :if={@known_projects == [] || @adding_project} class="flex-1 relative" id="project-path-autocomplete" phx-hook="ProjectPathAutocomplete">
+                  <input
+                    type="text"
+                    name="new_project_path"
+                    value={@new_project_path}
+                    placeholder="/path/to/your-project"
+                    phx-keyup="filter_suggestions"
+                    autocomplete="off"
+                    class="w-full bg-transparent border-b-2 border-base-content px-0 py-3 font-mono text-sm focus:outline-none placeholder:text-base-content/20"
+                  />
+                  <%!-- Filesystem suggestions --%>
                   <div
-                    :if={@mention_results != []}
-                    data-mention-results
-                    class="absolute left-0 right-0 border border-base-content/20 bg-base-100 z-20 max-h-48 overflow-y-auto"
-                    style="bottom: 100%; margin-bottom: 4px;"
+                    :if={@suggestions != []}
+                    data-suggestions
+                    class="absolute top-full left-0 right-0 border border-base-content/20 bg-base-100 z-10 max-h-48 overflow-y-auto"
                   >
                     <button
-                      :for={{path, idx} <- Enum.with_index(@mention_results)}
+                      :for={path <- @suggestions}
                       type="button"
-                      phx-click="mention_select_path"
+                      phx-click="add_project"
                       phx-value-path={path}
-                      class={[
-                        "w-full text-left px-3 py-1.5 font-mono text-xs border-b border-base-content/5 last:border-0 transition-colors duration-75",
-                        idx == @mention_index && "bg-base-content text-base-100",
-                        idx != @mention_index && "hover:bg-base-content/10"
-                      ]}
+                      class="w-full text-left px-3 py-2 font-mono text-xs hover:bg-base-content hover:text-base-100 transition-colors duration-100 border-b border-base-content/5 last:border-0"
                     >
                       <span class="text-base-content/40">{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
                     </button>
                   </div>
                 </div>
+                <button
+                  :if={!@adding_project && @known_projects != []}
+                  type="button"
+                  phx-click="toggle_add_project"
+                  class="font-mono text-[10px] tracking-widest uppercase text-base-content/30 hover:text-base-content border-b border-transparent hover:border-base-content transition-colors shrink-0"
+                >
+                  + Add
+                </button>
+                <button
+                  :if={@adding_project}
+                  type="button"
+                  phx-click="add_project"
+                  phx-value-path={@new_project_path}
+                  class="border-2 border-base-content px-4 py-2 font-mono text-[10px] tracking-widest uppercase hover:bg-base-content hover:text-base-100 transition-colors duration-100 shrink-0"
+                >
+                  Add
+                </button>
+                <button
+                  :if={@adding_project}
+                  type="button"
+                  phx-click="toggle_add_project"
+                  class="font-mono text-[10px] text-base-content/30 hover:text-base-content shrink-0"
+                >
+                  Cancel
+                </button>
               </div>
+            </div>
 
-              <%!-- Automation level --%>
-              <div>
-                <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-3">
-                  Automation
-                </label>
-                <div class="flex gap-0">
-                  <label
-                    :for={
-                      {level, label, desc} <- [
-                        {"manual", "Manual",
-                         "Human approves each phase. Stops at PR points and questions."},
-                        {"supervised", "Supervised",
-                         "Review the plan, then cruise. Skips PR points. Auto-resolves questions."},
-                        {"autopilot", "Autopilot",
-                         "Fully autonomous. Iterates until all tasks are done."}
-                      ]
-                    }
+            <%!-- Goal --%>
+            <div>
+              <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-2">
+                Task
+              </label>
+              <div id="goal-mention" phx-hook="MentionAutocomplete" class="relative">
+                <textarea
+                  name="goal"
+                  rows="3"
+                  disabled={@creating}
+                  placeholder="What do you want done? Use @ to reference files"
+                  class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
+                >{@goal}</textarea>
+
+                <div
+                  :if={@mention_results != []}
+                  data-mention-results
+                  class="absolute left-0 right-0 border border-base-content/20 bg-base-100 z-20 max-h-48 overflow-y-auto"
+                  style="bottom: 100%; margin-bottom: 4px;"
+                >
+                  <button
+                    :for={{path, idx} <- Enum.with_index(@mention_results)}
+                    type="button"
+                    phx-click="mention_select_path"
+                    phx-value-path={path}
                     class={[
-                      "flex-1 cursor-pointer border-2 px-4 py-3 transition-colors duration-100 -ml-[2px] first:ml-0",
-                      @automation == level &&
-                        "border-base-content bg-base-content text-base-100 z-10 relative",
-                      @automation != level && "border-base-content/20 hover:border-base-content/50"
+                      "w-full text-left px-3 py-1.5 font-mono text-xs border-b border-base-content/5 last:border-0 transition-colors duration-75",
+                      idx == @mention_index && "bg-base-content text-base-100",
+                      idx != @mention_index && "hover:bg-base-content/10"
                     ]}
                   >
-                    <input
-                      type="radio"
-                      name="automation"
-                      value={level}
-                      checked={@automation == level}
-                      disabled={@creating}
-                      phx-click="set_automation"
-                      phx-value-level={level}
-                      class="sr-only"
-                    />
-                    <div class="font-mono text-[11px] tracking-widest uppercase font-bold">
-                      {label}
-                    </div>
-                    <div class={[
-                      "text-[10px] mt-1 leading-snug",
-                      @automation == level && "text-base-100/60",
-                      @automation != level && "text-base-content/40"
-                    ]}>
-                      {desc}
-                    </div>
-                  </label>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={@creating}
-                class={[
-                  "bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100",
-                  @creating && "opacity-50 cursor-wait"
-                ]}
-              >
-                {if @creating, do: "Creating...", else: "Start Session →"}
-              </button>
-            </form>
-          </div>
-
-          <%!-- Config summary (collapsed for returning projects) --%>
-          <div
-            :if={@config_saved && @config_collapsed}
-            class="border-t border-base-content/10 pt-4 mb-6"
-          >
-            <div class="flex items-center justify-between">
-              <div class="font-mono text-xs text-base-content/40 flex items-center gap-4">
-                <span :if={@selected_skills != []}>{length(@selected_skills)} skills</span>
-                <span :if={@test_command != ""}>{@test_command}</span>
-              </div>
-              <button
-                phx-click="toggle_config"
-                class="font-mono text-[10px] tracking-widest uppercase text-base-content/30 hover:text-base-content cursor-pointer"
-              >
-                Configure
-              </button>
-            </div>
-          </div>
-
-          <%!-- Full config form (shown for new projects or when expanded) --%>
-          <div :if={!@config_saved || !@config_collapsed}>
-            <%!-- What was found --%>
-            <div class="grid grid-cols-2 gap-6 mb-8 text-xs">
-              <div>
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">
-                  CLAUDE.md
-                </h3>
-                <div :for={md <- @scan.claude_mds} class="py-0.5 font-mono">{md}</div>
-              </div>
-              <div>
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-2">
-                  Skills ({length(@scan.skills)})
-                </h3>
-                <div :for={skill <- Enum.take(@scan.skills, 6)} class="py-0.5 font-mono">
-                  {skill.name}
-                </div>
-                <div :if={length(@scan.skills) > 6} class="text-base-content/30">
-                  +{length(@scan.skills) - 6} more
+                    <span class="text-base-content/40">{Path.dirname(path)}/</span><span class="font-medium">{Path.basename(path)}</span>
+                  </button>
                 </div>
               </div>
             </div>
 
-            <%!-- Configuration form --%>
-            <form phx-submit="save_config" phx-change="update_config" class="space-y-6 mb-8">
-              <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
-                  Skills
-                </h3>
-                <div class="grid grid-cols-3 gap-x-4 gap-y-1">
-                  <label
-                    :for={skill <- @scan.skills}
-                    class="flex items-center gap-2 py-1 cursor-pointer hover:text-base-content text-base-content/60 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      name="skills[]"
-                      value={skill.name}
-                      checked={skill.name in @selected_skills}
-                      class="accent-current"
-                    />
-                    <span class="font-mono text-xs">{skill.name}</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
-                  Commands
-                </h3>
-                <div class="space-y-3">
-                  <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
-                      Test command
-                    </label>
-                    <input
-                      type="text"
-                      name="test_command"
-                      value={@test_command}
-                      placeholder="bun test"
-                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20"
-                    />
-                  </div>
-                  <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
-                      Dev start
-                    </label>
-                    <input
-                      type="text"
-                      name="dev_start"
-                      value={@dev_start}
-                      placeholder="./dev.sh up -d"
-                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content placeholder:text-base-content/20"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="border-t border-base-content/10 pt-6">
-                <h3 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-4">
-                  Git
-                </h3>
-                <div class="grid grid-cols-2 gap-4">
-                  <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
-                      Branch prefix
-                    </label>
-                    <input
-                      type="text"
-                      name="branch_prefix"
-                      value={@branch_prefix}
-                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
-                    />
-                  </div>
-                  <div>
-                    <label class="font-mono text-[10px] text-base-content/50 block mb-1">
-                      Base branch
-                    </label>
-                    <input
-                      type="text"
-                      name="base_branch"
-                      value={@base_branch}
-                      class="w-full bg-transparent border-b border-base-content/30 py-2 font-mono text-sm focus:outline-none focus:border-base-content"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="flex items-center gap-4">
-                <button
-                  type="submit"
+            <%!-- Automation level --%>
+            <div>
+              <label class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 block mb-3">
+                Automation
+              </label>
+              <div class="flex gap-0">
+                <label
+                  :for={
+                    {level, label, desc} <- [
+                      {"manual", "Manual", "Approve each phase"},
+                      {"supervised", "Supervised", "Review plan, then auto"},
+                      {"autopilot", "Autopilot", "Fully autonomous"}
+                    ]
+                  }
                   class={[
-                    "border-2 border-base-content px-8 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-colors duration-100",
-                    "hover:bg-base-content hover:text-base-100",
-                    @config_saved && "bg-base-content text-base-100"
+                    "flex-1 cursor-pointer border-2 px-4 py-3 transition-colors duration-100 -ml-[2px] first:ml-0",
+                    @automation == level &&
+                      "border-base-content bg-base-content text-base-100 z-10 relative",
+                    @automation != level && "border-base-content/20 hover:border-base-content/50"
                   ]}
                 >
-                  {if @config_saved, do: "Saved", else: "Save Config"}
-                </button>
-                <button
-                  :if={@config_saved}
-                  type="button"
-                  phx-click="toggle_config"
-                  class="font-mono text-[10px] tracking-widest uppercase text-base-content/40 hover:text-base-content"
-                >
-                  Collapse
-                </button>
+                  <input
+                    type="radio"
+                    name="automation"
+                    value={level}
+                    checked={@automation == level}
+                    disabled={@creating}
+                    phx-click="set_automation"
+                    phx-value-level={level}
+                    class="sr-only"
+                  />
+                  <div class="font-mono text-[11px] tracking-widest uppercase font-bold">
+                    {label}
+                  </div>
+                  <div class={[
+                    "text-[10px] mt-1 leading-snug",
+                    @automation == level && "text-base-100/60",
+                    @automation != level && "text-base-content/40"
+                  ]}>
+                    {desc}
+                  </div>
+                </label>
               </div>
-            </form>
-          </div>
+            </div>
+
+            <%!-- Error --%>
+            <div :if={@error} class="border-l-4 border-base-content pl-4 py-2 text-sm">
+              {@error}
+            </div>
+
+            <button
+              type="submit"
+              disabled={@creating}
+              class={[
+                "bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100",
+                @creating && "opacity-50 cursor-wait"
+              ]}
+            >
+              {if @creating, do: "Creating...", else: "Start Session"}
+            </button>
+          </form>
         </div>
 
-        <%!-- Projects & Sessions --%>
-        <div :if={@projects != []} class="mt-16">
+        <%!-- Active Sessions --%>
+        <div :if={@projects != []} class="mt-8">
           <div class="border-t border-base-content/20 mb-8" />
           <h2 class="font-mono text-[10px] tracking-[0.2em] uppercase text-base-content/40 mb-6">
-            Projects
+            Active Sessions
           </h2>
           <div class="space-y-8">
             <div :for={{project_path, project_sessions} <- @projects}>
@@ -462,185 +305,114 @@ defmodule ForgeWeb.HomeLive do
   # -- Events -------------------------------------------------------
 
   @impl true
+  def handle_event("select_project", %{"project_path" => path}, socket) do
+    {:noreply,
+     socket
+     |> assign(:project_path, path)
+     |> assign(:project_files, load_project_files(path))}
+  end
+
+  def handle_event("toggle_add_project", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:adding_project, !socket.assigns.adding_project)
+     |> assign(:new_project_path, "")
+     |> assign(:suggestions, [])}
+  end
+
   def handle_event("filter_suggestions", %{"value" => query}, socket) do
     query = String.trim(query)
 
     suggestions =
       if query == "" do
-        socket.assigns.known_projects
+        []
       else
         if String.starts_with?(query, "/") or String.starts_with?(query, "~") do
-          browse_filesystem(query, socket.assigns.known_projects)
+          browse_filesystem(query)
         else
           socket.assigns.known_projects
           |> Enum.filter(&String.contains?(String.downcase(&1), String.downcase(query)))
         end
       end
 
-    {:noreply,
-     assign(socket, suggestions: suggestions, project_path: query, selected_suggestion_index: nil)}
+    {:noreply, assign(socket, suggestions: suggestions, new_project_path: query)}
   end
 
-  def handle_event("select_project", %{"path" => path}, socket) do
-    send(self(), {:do_scan, path})
-    {:noreply, assign(socket, project_path: path, suggestions: [], selected_suggestion_index: nil)}
-  end
-
-  def handle_event("navigate_suggestion", %{"direction" => direction}, socket) do
-    count = length(socket.assigns.suggestions)
-
-    if count == 0 do
-      {:noreply, socket}
-    else
-      current = socket.assigns.selected_suggestion_index
-
-      index =
-        case {direction, current} do
-          {"down", nil} -> 0
-          {"down", i} -> rem(i + 1, count)
-          {"up", nil} -> count - 1
-          {"up", i} -> rem(i - 1 + count, count)
-        end
-
-      {:noreply, assign(socket, :selected_suggestion_index, index)}
-    end
-  end
-
-  def handle_event("clear_suggestions", _params, socket) do
-    {:noreply, assign(socket, suggestions: [], selected_suggestion_index: nil)}
-  end
-
-  def handle_event("scan_project", params, socket) do
-    path = params["project_path"] || params["value"] || ""
+  def handle_event("add_project", %{"path" => path}, socket) do
     path = String.trim(path)
 
-    if path == "" do
-      {:noreply, assign(socket, scan: nil, error: nil, project_path: "")}
-    else
-      case ProjectScanner.scan(path) do
+    if path != "" and File.dir?(path) do
+      # Scan to validate it's a valid project, then auto-save config if needed
+      case Forge.ProjectScanner.scan(path) do
         {:ok, scan} ->
-          config = scan.config
-          skills = get_in(config, ["skills", "include"]) || Enum.map(scan.skills, & &1.name)
-          test_cmd = get_in(config, ["commands", "test"]) || ""
-          dev_start = get_in(config, ["commands", "dev_start"]) || ""
-          branch_prefix = get_in(config, ["git", "branch_prefix"]) || "wt-"
-          base_branch = get_in(config, ["git", "base_branch"]) || "main"
+          unless scan.has_config do
+            # Auto-create default config
+            config = %{
+              "project" => %{"name" => scan.name},
+              "skills" => %{"include" => Enum.map(scan.skills, & &1.name)},
+              "commands" => %{},
+              "git" => %{"branch_prefix" => "wt-", "base_branch" => "main"}
+            }
+
+            Forge.ProjectScanner.save_config(path, config)
+          end
 
           KnownProjects.add(path)
-          project_files = Forge.FileTree.list(path)
 
           {:noreply,
            socket
-           |> assign(:project_path, path)
-           |> assign(:scan, scan)
-           |> assign(:error, nil)
-           |> assign(:config_saved, scan.has_config)
-           |> assign(:config_collapsed, scan.has_config)
-           |> assign(:suggestions, [])
            |> assign(:known_projects, KnownProjects.list())
-           |> assign(:selected_skills, skills)
-           |> assign(:test_command, test_cmd)
-           |> assign(:dev_start, dev_start)
-           |> assign(:branch_prefix, branch_prefix)
-           |> assign(:base_branch, base_branch)
-           |> assign(:project_files, project_files)}
+           |> assign(:project_path, path)
+           |> assign(:adding_project, false)
+           |> assign(:new_project_path, "")
+           |> assign(:suggestions, [])
+           |> assign(:project_files, load_project_files(path))}
 
         {:error, reason} ->
-          {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
+          {:noreply, assign(socket, :error, reason)}
       end
+    else
+      {:noreply, assign(socket, :error, "Directory not found: #{path}")}
     end
   end
 
-  def handle_event("toggle_config", _params, socket) do
-    {:noreply, assign(socket, :config_collapsed, !socket.assigns.config_collapsed)}
-  end
-
-  def handle_event("update_config", params, socket) do
-    skills = params["skills"] || []
-
-    {:noreply,
-     socket
-     |> assign(:selected_skills, skills)
-     |> assign(:test_command, params["test_command"] || "")
-     |> assign(:dev_start, params["dev_start"] || "")
-     |> assign(:branch_prefix, params["branch_prefix"] || "wt-")
-     |> assign(:base_branch, params["base_branch"] || "main")}
-  end
-
-  def handle_event("save_config", params, socket) do
-    skills = params["skills"] || []
-
-    config = %{
-      "project" => %{"name" => socket.assigns.scan.name},
-      "skills" => %{"include" => skills},
-      "commands" =>
-        %{
-          "test" => params["test_command"],
-          "dev_start" => params["dev_start"]
-        }
-        |> Enum.reject(fn {_k, v} -> v == "" end)
-        |> Map.new(),
-      "git" => %{
-        "branch_prefix" => params["branch_prefix"] || "wt-",
-        "base_branch" => params["base_branch"] || "main"
-      },
-      "pr" => %{
-        "codex_wait_minutes" => "10"
-      }
-    }
-
-    ProjectScanner.save_config(socket.assigns.project_path, config)
-
-    {:noreply,
-     socket
-     |> assign(:config_saved, true)
-     |> assign(:selected_skills, skills)
-     |> assign(:test_command, params["test_command"] || "")
-     |> assign(:dev_start, params["dev_start"] || "")}
-  end
-
-  def handle_event("start_session", %{"goal" => goal}, socket) do
+  def handle_event("start_session", %{"goal" => goal} = params, socket) do
     goal = String.trim(goal)
+    project_path = params["project_path"] || socket.assigns.project_path
     socket = assign(socket, mention_results: [], mention_index: 0, mention_query: nil)
 
     cond do
-      socket.assigns.project_path == "" ->
-        {:noreply, assign(socket, :error, "Scan a project first")}
+      project_path == "" ->
+        {:noreply, assign(socket, :error, "Select a project first")}
 
       goal == "" ->
         {:noreply, assign(socket, :error, "Describe what you want done")}
 
       true ->
-        if !socket.assigns.config_saved do
-          # Auto-save config for new projects so the user doesn't have to click Save first
-          config = %{
-            "project" => %{"name" => socket.assigns.scan.name},
-            "skills" => %{"include" => socket.assigns.selected_skills},
-            "commands" =>
-              %{"test" => socket.assigns.test_command, "dev_start" => socket.assigns.dev_start}
-              |> Enum.reject(fn {_k, v} -> v == "" end)
-              |> Map.new(),
-            "git" => %{
-              "branch_prefix" => socket.assigns.branch_prefix,
-              "base_branch" => socket.assigns.base_branch
-            }
-          }
-
-          ProjectScanner.save_config(socket.assigns.project_path, config)
-        end
-
-        project_path = socket.assigns.project_path
         automation = String.to_atom(socket.assigns.automation)
 
         {:noreply,
          socket
          |> assign(:creating, true)
+         |> assign(:error, nil)
          |> start_async(:create_session, fn ->
            Session.create_session(project_path, goal, automation: automation)
          end)}
     end
   end
 
+  def handle_event("set_automation", %{"level" => level}, socket) do
+    {:noreply, assign(socket, :automation, level)}
+  end
+
+  def handle_event("delete_session", %{"id" => session_id}, socket) do
+    Session.delete_session(session_id)
+    sessions = Session.list_sessions()
+    projects = group_sessions_by_project(sessions)
+    {:noreply, assign(socket, sessions: sessions, projects: projects)}
+  end
+
+  # Mention autocomplete handlers (for @file references in goal)
   def handle_event("mention_search", %{"query" => query}, socket) do
     results =
       Forge.FileTree.search(
@@ -690,17 +462,6 @@ defmodule ForgeWeb.HomeLive do
      |> push_event("mention_selected", %{text: path})}
   end
 
-  def handle_event("set_automation", %{"level" => level}, socket) do
-    {:noreply, assign(socket, :automation, level)}
-  end
-
-  def handle_event("delete_session", %{"id" => session_id}, socket) do
-    Session.delete_session(session_id)
-    sessions = Session.list_sessions()
-    projects = group_sessions_by_project(sessions)
-    {:noreply, assign(socket, sessions: sessions, projects: projects)}
-  end
-
   # -- Async handlers -----------------------------------------------
 
   @impl true
@@ -716,41 +477,13 @@ defmodule ForgeWeb.HomeLive do
     {:noreply, assign(socket, error: "Session creation failed unexpectedly", creating: false)}
   end
 
-  # -- Info handlers ------------------------------------------------
-
-  @impl true
-  def handle_info({:do_scan, path}, socket) do
-    case ProjectScanner.scan(path) do
-      {:ok, scan} ->
-        config = scan.config
-        KnownProjects.add(path)
-        project_files = Forge.FileTree.list(path)
-
-        {:noreply,
-         socket
-         |> assign(:project_path, path)
-         |> assign(:scan, scan)
-         |> assign(:error, nil)
-         |> assign(:config_saved, scan.has_config)
-         |> assign(:config_collapsed, scan.has_config)
-         |> assign(:suggestions, [])
-         |> assign(:known_projects, KnownProjects.list())
-         |> assign(
-           :selected_skills,
-           get_in(config, ["skills", "include"]) || Enum.map(scan.skills, & &1.name)
-         )
-         |> assign(:test_command, get_in(config, ["commands", "test"]) || "")
-         |> assign(:dev_start, get_in(config, ["commands", "dev_start"]) || "")
-         |> assign(:branch_prefix, get_in(config, ["git", "branch_prefix"]) || "wt-")
-         |> assign(:base_branch, get_in(config, ["git", "base_branch"]) || "main")
-         |> assign(:project_files, project_files)}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, scan: nil, error: reason, project_path: path)}
-    end
-  end
-
   # -- Helpers ------------------------------------------------------
+
+  defp load_project_files(""), do: []
+
+  defp load_project_files(path) do
+    if File.dir?(path), do: Forge.FileTree.list(path), else: []
+  end
 
   defp group_sessions_by_project(sessions) do
     sessions
@@ -759,7 +492,7 @@ defmodule ForgeWeb.HomeLive do
     |> Enum.sort_by(fn {path, _} -> path end)
   end
 
-  defp browse_filesystem(query, known_projects) do
+  defp browse_filesystem(query) do
     expanded = expand_home(query)
 
     {parent, prefix} =
@@ -769,33 +502,23 @@ defmodule ForgeWeb.HomeLive do
         {Path.dirname(expanded), Path.basename(expanded)}
       end
 
-    matching_known =
-      known_projects
-      |> Enum.filter(&String.contains?(String.downcase(&1), String.downcase(query)))
+    case File.ls(parent) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(fn entry ->
+          full = Path.join(parent, entry)
 
-    fs_entries =
-      case File.ls(parent) do
-        {:ok, entries} ->
-          entries
-          |> Enum.filter(fn entry ->
-            full = Path.join(parent, entry)
+          File.dir?(full) &&
+            !String.starts_with?(entry, ".") &&
+            (prefix == "" || String.starts_with?(String.downcase(entry), String.downcase(prefix)))
+        end)
+        |> Enum.sort()
+        |> Enum.map(&Path.join(parent, &1))
+        |> Enum.take(20)
 
-            File.dir?(full) &&
-              !String.starts_with?(entry, ".") &&
-              (prefix == "" || String.starts_with?(String.downcase(entry), String.downcase(prefix)))
-          end)
-          |> Enum.sort()
-          |> Enum.map(&Path.join(parent, &1))
-
-        {:error, _} ->
-          []
-      end
-
-    known_set = MapSet.new(matching_known)
-    unique_fs = Enum.reject(fs_entries, &MapSet.member?(known_set, &1))
-
-    (matching_known ++ unique_fs)
-    |> Enum.take(20)
+      {:error, _} ->
+        []
+    end
   end
 
   defp expand_home(path) do

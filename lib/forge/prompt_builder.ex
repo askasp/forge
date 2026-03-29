@@ -29,6 +29,7 @@ defmodule Forge.PromptBuilder do
   - Do NOT modify files outside the scope of your task
   - Do NOT push to remote
   - If the task starts with "Fix:", a QA or reviewer found an issue — fix the CODE, not the tests
+  - If the task includes Acceptance Criteria, verify your implementation meets ALL of them before committing
   - Before outputting your final result, check `.forge/user-notes.md` — the user may have added context while you were working
 
   ## Output Format
@@ -64,6 +65,7 @@ defmodule Forge.PromptBuilder do
   - Follow project test conventions (check existing test files for patterns)
   - Use existing test factories and helpers
   - Do NOT push to remote
+  - If the task includes Acceptance Criteria, write tests that verify EACH criterion explicitly
   - Before outputting your final result, check `.forge/user-notes.md` — the user may have added context while you were working
 
   ## Output Format
@@ -106,6 +108,7 @@ defmodule Forge.PromptBuilder do
   - Review ONLY the code diff — do not run tests or modify source code
   - Focus on bugs and risks first, then style
   - Reference specific file:line for every finding
+  - If the task includes Acceptance Criteria, verify the implementation satisfies each one — flag any that appear unmet
   - Do NOT push to remote
   - Before outputting your final result, check `.forge/user-notes.md` — the user may have added context while you were working
 
@@ -198,7 +201,9 @@ defmodule Forge.PromptBuilder do
   plan is a Markdown string with your detailed analysis (use \\n for newlines).
   role is "dev", "qa", or "reviewer". Defaults to "dev" if omitted.
   depends_on is the 0-indexed position of another task in this list, or null for no dependency.
-  acceptance_criteria is a newline-separated list of testable conditions (for dev tasks).
+  acceptance_criteria is a newline-separated checklist of observable, testable conditions (for dev tasks).
+  Good criteria are specific and verifiable: "GET /api/users?q=john returns matching users", "Validation error shown when email is blank", "Migration adds index on users.email".
+  Bad criteria are vague: "search works", "handles errors", "good UX".
   """
 
   @doc "Build a prompt for a given role and task."

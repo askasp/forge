@@ -11,8 +11,11 @@ defmodule Forge.KnownProjects do
     case File.read(@path) do
       {:ok, data} ->
         case Jason.decode(data) do
-          {:ok, projects} when is_list(projects) -> projects
-          _ -> []
+          {:ok, projects} when is_list(projects) ->
+            Enum.filter(projects, &valid_project?/1)
+
+          _ ->
+            []
         end
 
       {:error, _} ->
@@ -32,6 +35,10 @@ defmodule Forge.KnownProjects do
   def remove(project_path) do
     projects = list() |> Enum.reject(&(&1 == project_path))
     save(projects)
+  end
+
+  defp valid_project?(path) do
+    not String.starts_with?(path, "/tmp") and File.dir?(path)
   end
 
   defp save(projects) do

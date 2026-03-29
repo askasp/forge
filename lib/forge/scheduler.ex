@@ -305,8 +305,15 @@ defmodule Forge.Scheduler do
       # Show progress immediately before any I/O
       broadcast(state.session_id, {:agent_setup, task.id, task.role, "building prompt"})
 
-      # Build prompt
-      prompt = PromptBuilder.build(state.project, task.role, task.prompt)
+      # Build prompt — include acceptance criteria so all roles can verify against them
+      task_prompt =
+        if task.acceptance_criteria && task.acceptance_criteria != "" do
+          task.prompt <> "\n\n## Acceptance Criteria\n#{task.acceptance_criteria}"
+        else
+          task.prompt
+        end
+
+      prompt = PromptBuilder.build(state.project, task.role, task_prompt)
 
       # Transition to assigned
       TaskEngine.transition(task, :assigned)

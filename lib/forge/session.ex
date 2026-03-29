@@ -126,25 +126,32 @@ defmodule Forge.Session do
       |> Repo.all()
 
     for session <- sessions do
-      if session.worktree_path && File.dir?(session.worktree_path) do
-        Logger.info("[Session] Restoring session #{session.id}")
+      try do
+        if session.worktree_path && File.dir?(session.worktree_path) do
+          Logger.info("[Session] Restoring session #{session.id}")
 
-        # Reset orphaned tasks to :planned so they get re-dispatched
-        TaskEngine.reset_orphaned_tasks(session.id)
+          # Reset orphaned tasks to :planned so they get re-dispatched
+          TaskEngine.reset_orphaned_tasks(session.id)
 
-        # Reload project config from disk
-        project = Forge.Project.load(session.project.repo_path)
+          # Reload project config from disk
+          project = Forge.Project.load(session.project.repo_path)
 
-        # Restart session processes
-        start_session_processes(session, project)
+          # Restart session processes
+          start_session_processes(session, project)
 
-        Logger.info("[Session] Restored session #{session.id}")
-      else
-        Logger.info("[Session] Worktree gone for session #{session.id}, marking complete")
+          Logger.info("[Session] Restored session #{session.id}")
+        else
+          Logger.info("[Session] Worktree gone for session #{session.id}, marking complete")
 
-        session
-        |> Session.changeset(%{state: :complete})
-        |> Repo.update()
+          session
+          |> Session.changeset(%{state: :complete})
+          |> Repo.update()
+        end
+      rescue
+        e ->
+          Logger.error(
+            "[Session] Failed to restore session #{session.id}: #{Exception.message(e)}"
+          )
       end
     end
 
@@ -244,21 +251,10 @@ defmodule Forge.Session do
                  stderr_to_stdout: true
                ) do
             {_, 0} ->
-              # Merge succeeded — clean up worktree, branch, and session
-              terminate_session_processes(session_id)
-
-              System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
-                cd: project_path,
-                stderr_to_stdout: true
-              )
-
-              System.cmd("git", ["branch", "-D", branch],
-                cd: project_path,
-                stderr_to_stdout: true
-              )
-
-              # Delete agent runs and tasks (agent_runs FK cascades from tasks,
-              # but explicit delete is faster than loading all task IDs)
+              # Merge succeeded — clean up in safe order:
+              # 1. Delete data (before killing processes to avoid stale PubSub)
+              # 2. Update session state
+              # 3. Terminate processes last
               task_ids =
                 from(t in Forge.Schemas.Task,
                   where: t.session_id == ^session_id,
@@ -272,6 +268,19 @@ defmodule Forge.Session do
               |> Repo.delete_all()
 
               session |> Session.changeset(%{state: :complete}) |> Repo.update()
+
+              terminate_session_processes(session_id)
+
+              System.cmd("git", ["worktree", "remove", "--force", session.worktree_path],
+                cd: project_path,
+                stderr_to_stdout: true
+              )
+
+              System.cmd("git", ["branch", "-D", branch],
+                cd: project_path,
+                stderr_to_stdout: true
+              )
+
               Logger.info("[Session] Merged #{branch} into #{base} and cleaned up")
               :ok
 

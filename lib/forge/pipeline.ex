@@ -171,8 +171,10 @@ defmodule Forge.Pipeline do
   @known_atoms ~w(dev qa reviewer human planner)a
 
   defp safe_to_atom(str) when is_binary(str) do
-    atom = String.to_atom(str)
-    if atom in @known_atoms, do: atom, else: atom
+    atom = String.to_existing_atom(str)
+    if atom in @known_atoms, do: atom, else: raise "Unknown role in pipeline: #{str}"
+  rescue
+    ArgumentError -> raise "Unknown role in pipeline: #{str}"
   end
 
   # ── Default TOML generation ────────────────────────────────────

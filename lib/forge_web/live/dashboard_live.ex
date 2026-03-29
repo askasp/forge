@@ -5,8 +5,6 @@ defmodule ForgeWeb.DashboardLive do
 
   @impl true
   def mount(%{"id" => session_id}, _session, socket) do
-    require Logger
-    Logger.warning("[Dashboard] MOUNT called for session #{session_id} (connected=#{connected?(socket)})")
     session =
       Forge.Repo.get(Forge.Schemas.Session, session_id)
       |> case do
@@ -241,6 +239,15 @@ defmodule ForgeWeb.DashboardLive do
                 </button>
               </div>
               <pre class="font-mono text-xs text-base-content/70 mt-2 whitespace-pre-wrap">{@merge_error}</pre>
+              <div class="flex gap-2 mt-3">
+                <button
+                  phx-click="merge_into_main"
+                  data-confirm="Retry merge into main?"
+                  class="font-mono text-[10px] tracking-widest uppercase border border-base-content/30 px-3 py-1.5 hover:bg-base-content hover:text-base-100 transition-colors"
+                >
+                  Retry Merge
+                </button>
+              </div>
             </div>
 
             <%!-- Planning card --%>
@@ -1544,6 +1551,8 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_event("merge_into_main", _params, socket) do
+    require Logger
+
     case Forge.Session.merge_into_main(socket.assigns.session_id) do
       :ok ->
         projects = group_sessions(Forge.Session.list_sessions())
@@ -1555,10 +1564,15 @@ defmodule ForgeWeb.DashboardLive do
          |> assign(:page_title, page_title(:merged, nil, 0, 0))}
 
       {:error, reason} ->
-        require Logger
         Logger.error("[Dashboard] Merge failed: #{reason}")
-        {:noreply, assign(socket, :merge_error, reason)}
+        {:noreply, socket |> assign(:merge_error, reason) |> put_flash(:error, "Merge failed: #{reason}")}
     end
+  rescue
+    e ->
+      require Logger
+      reason = Exception.message(e)
+      Logger.error("[Dashboard] Merge crashed: #{reason}\n#{Exception.format_stacktrace(__STACKTRACE__)}")
+      {:noreply, socket |> assign(:merge_error, reason) |> put_flash(:error, "Merge failed: #{reason}")}
   end
 
   def handle_event("dismiss_merge_error", _params, socket) do
@@ -1572,11 +1586,10 @@ defmodule ForgeWeb.DashboardLive do
   @impl true
   def handle_info({event, _data}, socket)
       when event in [:task_created, :task_updated, :tasks_created] do
-    # Don't reload if we're in a terminal state (merged/error showing)
     if socket.assigns.orchestrator_state in [:merged] do
       {:noreply, socket}
     else
-      {:noreply, reload_tasks(socket)}
+      {:noreply, safe_reload_tasks(socket)}
     end
   end
 
@@ -1685,7 +1698,7 @@ defmodule ForgeWeb.DashboardLive do
     if socket.assigns.orchestrator_state in [:merged] do
       {:noreply, socket}
     else
-      {:noreply, reload_tasks(socket)}
+      {:noreply, safe_reload_tasks(socket)}
     end
   end
 
@@ -1702,24 +1715,27 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_info(:tick, socket) do
-    tick = (socket.assigns[:tick_count] || 0) + 1
-    socket = assign(socket, :tick_count, tick)
-
-    # Every 5 seconds, refresh from DB and check for stuck state
-    # Skip if merge error is showing — don't clobber the error display
-    socket =
-      if rem(tick, 5) == 0 and not socket.assigns[:merge_error] do
-        socket = reload_tasks(socket)
-        maybe_auto_recover(socket)
-      else
-        socket
-      end
-
-    # Force re-render for elapsed time display
-    if socket.assigns.agent_started_at do
-      {:noreply, assign(socket, :agent_started_at, socket.assigns.agent_started_at)}
-    else
+    # Skip all processing in terminal states
+    if socket.assigns.orchestrator_state == :merged do
       {:noreply, socket}
+    else
+      tick = (socket.assigns[:tick_count] || 0) + 1
+      socket = assign(socket, :tick_count, tick)
+
+      socket =
+        if rem(tick, 5) == 0 and !socket.assigns[:merge_error] do
+          socket = safe_reload_tasks(socket)
+          maybe_auto_recover(socket)
+        else
+          socket
+        end
+
+      # Force re-render for elapsed time display
+      if socket.assigns.agent_started_at do
+        {:noreply, assign(socket, :agent_started_at, socket.assigns.agent_started_at)}
+      else
+        {:noreply, socket}
+      end
     end
   end
 
@@ -2071,23 +2087,39 @@ defmodule ForgeWeb.DashboardLive do
 
   defp reload_tasks(socket) do
     session_id = socket.assigns.session_id
-    tasks = TaskEngine.list_tasks(session_id)
-    {done, total} = TaskEngine.progress(session_id)
-    steps = Enum.map(tasks, &task_to_step/1)
     session = Forge.Repo.get(Forge.Schemas.Session, session_id)
-    orch_state = derive_orchestrator_state(tasks, session)
-    plan_md = session && session.plan_markdown
 
-    socket
-    |> assign(:steps, steps)
-    |> assign(:done, done)
-    |> assign(:total, total)
-    |> assign(:orchestrator_state, orch_state)
-    |> assign(:agent_role, current_agent_role(tasks))
-    |> assign(:plan_markdown, plan_md)
-    |> assign(:plan_html, Forge.PlanRenderer.render(plan_md))
-    |> assign(:page_title, page_title(orch_state, current_agent_role(tasks), done, total))
-    |> maybe_notify(orch_state)
+    # Session gone — don't crash, keep current state
+    if is_nil(session) do
+      socket
+    else
+      tasks = TaskEngine.list_tasks(session_id)
+      {done, total} = TaskEngine.progress(session_id)
+      steps = Enum.map(tasks, &task_to_step/1)
+      orch_state = derive_orchestrator_state(tasks, session)
+      plan_md = session.plan_markdown
+
+      socket
+      |> assign(:steps, steps)
+      |> assign(:done, done)
+      |> assign(:total, total)
+      |> assign(:orchestrator_state, orch_state)
+      |> assign(:agent_role, current_agent_role(tasks))
+      |> assign(:plan_markdown, plan_md)
+      |> assign(:plan_html, Forge.PlanRenderer.render(plan_md))
+      |> assign(:page_title, page_title(orch_state, current_agent_role(tasks), done, total))
+      |> maybe_notify(orch_state)
+    end
+  end
+
+  # Crash-safe wrapper — prevents LiveView from dying on reload errors
+  defp safe_reload_tasks(socket) do
+    reload_tasks(socket)
+  rescue
+    e ->
+      require Logger
+      Logger.warning("[Dashboard] reload_tasks crashed: #{Exception.message(e)}")
+      socket
   end
 
   # Detect stuck sessions and auto-recover.
