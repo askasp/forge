@@ -5,6 +5,8 @@ defmodule ForgeWeb.DashboardLive do
 
   @impl true
   def mount(%{"id" => session_id}, _session, socket) do
+    require Logger
+    Logger.warning("[Dashboard] MOUNT called for session #{session_id} (connected=#{connected?(socket)})")
     session =
       Forge.Repo.get(Forge.Schemas.Session, session_id)
       |> case do
@@ -219,18 +221,26 @@ defmodule ForgeWeb.DashboardLive do
               </p>
             </div>
 
-            <%!-- Merge error --%>
+            <%!-- Merge error — sticky banner at top of content --%>
             <div
-              :if={assigns[:merge_error]}
-              class="mb-6 border-2 border-base-content/40 p-6 bg-base-200/50"
+              :if={@merge_error}
+              class="mb-6 border-2 border-base-content p-4 bg-base-200 sticky top-0 z-10"
             >
-              <div class="flex items-center gap-3 mb-2">
-                <span class="font-mono text-[10px] tracking-[0.15em] uppercase border-2 border-base-content px-2 py-0.5 font-bold">
-                  Error
-                </span>
-                <span class="text-sm">Merge failed</span>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="font-mono text-[10px] tracking-[0.15em] uppercase border-2 border-base-content px-2 py-0.5 font-bold">
+                    Error
+                  </span>
+                  <span class="text-sm">Merge failed</span>
+                </div>
+                <button
+                  phx-click="dismiss_merge_error"
+                  class="font-mono text-[9px] text-base-content/40 hover:text-base-content"
+                >
+                  &#x2715;
+                </button>
               </div>
-              <p class="font-mono text-xs text-base-content/60">{@merge_error}</p>
+              <pre class="font-mono text-xs text-base-content/70 mt-2 whitespace-pre-wrap">{@merge_error}</pre>
             </div>
 
             <%!-- Planning card --%>
@@ -1545,8 +1555,14 @@ defmodule ForgeWeb.DashboardLive do
          |> assign(:page_title, page_title(:merged, nil, 0, 0))}
 
       {:error, reason} ->
+        require Logger
+        Logger.error("[Dashboard] Merge failed: #{reason}")
         {:noreply, assign(socket, :merge_error, reason)}
     end
+  end
+
+  def handle_event("dismiss_merge_error", _params, socket) do
+    {:noreply, assign(socket, :merge_error, nil)}
   end
 
   # ── PubSub ───────────────────────────────────────────────────────
@@ -1556,7 +1572,12 @@ defmodule ForgeWeb.DashboardLive do
   @impl true
   def handle_info({event, _data}, socket)
       when event in [:task_created, :task_updated, :tasks_created] do
-    {:noreply, reload_tasks(socket)}
+    # Don't reload if we're in a terminal state (merged/error showing)
+    if socket.assigns.orchestrator_state in [:merged] do
+      {:noreply, socket}
+    else
+      {:noreply, reload_tasks(socket)}
+    end
   end
 
   # Agent output streaming (per-task)
@@ -1634,12 +1655,16 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_info({:session_complete, _session_id}, socket) do
-    socket =
-      socket
-      |> assign(:orchestrator_state, :complete)
-      |> maybe_notify(:complete)
+    if socket.assigns.orchestrator_state in [:merged] do
+      {:noreply, socket}
+    else
+      socket =
+        socket
+        |> assign(:orchestrator_state, :complete)
+        |> maybe_notify(:complete)
 
-    {:noreply, socket}
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:plan_updated, _session_id}, socket) do
@@ -1657,7 +1682,11 @@ defmodule ForgeWeb.DashboardLive do
   end
 
   def handle_info({:scheduler_resumed, _}, socket) do
-    {:noreply, reload_tasks(socket)}
+    if socket.assigns.orchestrator_state in [:merged] do
+      {:noreply, socket}
+    else
+      {:noreply, reload_tasks(socket)}
+    end
   end
 
   def handle_info({:cycle_limit_reached, _task_id, _role}, socket) do
@@ -1677,8 +1706,9 @@ defmodule ForgeWeb.DashboardLive do
     socket = assign(socket, :tick_count, tick)
 
     # Every 5 seconds, refresh from DB and check for stuck state
+    # Skip if merge error is showing — don't clobber the error display
     socket =
-      if rem(tick, 5) == 0 do
+      if rem(tick, 5) == 0 and not socket.assigns[:merge_error] do
         socket = reload_tasks(socket)
         maybe_auto_recover(socket)
       else
