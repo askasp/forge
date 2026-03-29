@@ -35,6 +35,7 @@ defmodule ForgeWeb.HomeLive do
       |> assign(:mention_index, 0)
       |> assign(:mention_query, nil)
       |> assign(:project_files, [])
+      |> assign(:creating, false)
 
     if project_from_url && connected?(socket) do
       send(self(), {:do_scan, project_from_url})
@@ -151,6 +152,7 @@ defmodule ForgeWeb.HomeLive do
                   <textarea
                     name="goal"
                     rows="3"
+                    disabled={@creating}
                     placeholder="What do you want done? Use @ to reference files"
                     class="w-full bg-transparent border-2 border-base-content p-4 text-base focus:outline-none focus:border-4 placeholder:text-base-content/20 placeholder:italic resize-y"
                   >{@goal}</textarea>
@@ -207,6 +209,7 @@ defmodule ForgeWeb.HomeLive do
                       name="automation"
                       value={level}
                       checked={@automation == level}
+                      disabled={@creating}
                       phx-click="set_automation"
                       phx-value-level={level}
                       class="sr-only"
@@ -227,9 +230,13 @@ defmodule ForgeWeb.HomeLive do
 
               <button
                 type="submit"
-                class="bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100"
+                disabled={@creating}
+                class={[
+                  "bg-base-content text-base-100 px-10 py-3 font-mono text-xs tracking-[0.2em] uppercase hover:bg-transparent hover:text-base-content border-2 border-base-content transition-colors duration-100",
+                  @creating && "opacity-50 cursor-wait"
+                ]}
               >
-                Start Session &rarr;
+                {if @creating, do: "Creating...", else: "Start Session →"}
               </button>
             </form>
           </div>
@@ -603,42 +610,34 @@ defmodule ForgeWeb.HomeLive do
       goal == "" ->
         {:noreply, assign(socket, :error, "Describe what you want done")}
 
-      !socket.assigns.config_saved ->
-        # Auto-save config for new projects so the user doesn't have to click Save first
-        config = %{
-          "project" => %{"name" => socket.assigns.scan.name},
-          "skills" => %{"include" => socket.assigns.selected_skills},
-          "commands" =>
-            %{"test" => socket.assigns.test_command, "dev_start" => socket.assigns.dev_start}
-            |> Enum.reject(fn {_k, v} -> v == "" end)
-            |> Map.new(),
-          "git" => %{
-            "branch_prefix" => socket.assigns.branch_prefix,
-            "base_branch" => socket.assigns.base_branch
-          }
-        }
-
-        ProjectScanner.save_config(socket.assigns.project_path, config)
-        automation = String.to_atom(socket.assigns.automation)
-
-        case Session.create_session(socket.assigns.project_path, goal, automation: automation) do
-          {:ok, session_id} ->
-            {:noreply, push_navigate(socket, to: ~p"/session/#{session_id}")}
-
-          {:error, reason} ->
-            {:noreply, assign(socket, :error, "Failed: #{reason}")}
-        end
-
       true ->
+        if !socket.assigns.config_saved do
+          # Auto-save config for new projects so the user doesn't have to click Save first
+          config = %{
+            "project" => %{"name" => socket.assigns.scan.name},
+            "skills" => %{"include" => socket.assigns.selected_skills},
+            "commands" =>
+              %{"test" => socket.assigns.test_command, "dev_start" => socket.assigns.dev_start}
+              |> Enum.reject(fn {_k, v} -> v == "" end)
+              |> Map.new(),
+            "git" => %{
+              "branch_prefix" => socket.assigns.branch_prefix,
+              "base_branch" => socket.assigns.base_branch
+            }
+          }
+
+          ProjectScanner.save_config(socket.assigns.project_path, config)
+        end
+
+        project_path = socket.assigns.project_path
         automation = String.to_atom(socket.assigns.automation)
 
-        case Session.create_session(socket.assigns.project_path, goal, automation: automation) do
-          {:ok, session_id} ->
-            {:noreply, push_navigate(socket, to: ~p"/session/#{session_id}")}
-
-          {:error, reason} ->
-            {:noreply, assign(socket, :error, "Failed: #{reason}")}
-        end
+        {:noreply,
+         socket
+         |> assign(:creating, true)
+         |> start_async(:create_session, fn ->
+           Session.create_session(project_path, goal, automation: automation)
+         end)}
     end
   end
 
@@ -700,6 +699,21 @@ defmodule ForgeWeb.HomeLive do
     sessions = Session.list_sessions()
     projects = group_sessions_by_project(sessions)
     {:noreply, assign(socket, sessions: sessions, projects: projects)}
+  end
+
+  # -- Async handlers -----------------------------------------------
+
+  @impl true
+  def handle_async(:create_session, {:ok, {:ok, session_id}}, socket) do
+    {:noreply, push_navigate(socket, to: ~p"/session/#{session_id}")}
+  end
+
+  def handle_async(:create_session, {:ok, {:error, reason}}, socket) do
+    {:noreply, assign(socket, error: "Failed: #{reason}", creating: false)}
+  end
+
+  def handle_async(:create_session, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, error: "Session creation failed unexpectedly", creating: false)}
   end
 
   # -- Info handlers ------------------------------------------------
